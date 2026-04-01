@@ -1,0 +1,19 @@
+# Dependencies
+/vendor/
+/node_modules/
+
+# Environment files
+.env
+.env.*
+
+# Logs
+/storage/logs/
+*.log
+
+# Databases
+*.sqlite
+*.sql
+
+# System files
+.DS_Store
+Thumbs.db
