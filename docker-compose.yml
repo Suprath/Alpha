@@ -10,15 +10,38 @@ services:
       - "9000:9000"
     environment:
       - TZ=Asia/Kolkata
+    env_file:
+      - .env
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
+      - alpha_secrets:/app/secrets
     # ipc: host is required for ultra-low latency shared memory IPC later
     ipc: host
+    depends_on:
+      - redis
     deploy:
       resources:
         limits:
           cpus: '1.0'
           memory: 512M
 
-# Future services will be added here with the same TZ and volume mounts
+  redis:
+    build:
+      context: ./infra/redis
+      dockerfile: Dockerfile
+    image: alpha-redis:latest
+    container_name: alpha-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    environment:
+      - TZ=Asia/Kolkata
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - redis_data:/data
+
+volumes:
+  redis_data:
+  alpha_secrets:

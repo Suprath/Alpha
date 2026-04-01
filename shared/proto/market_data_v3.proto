@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package com.upstox.marketdata.v3;
+
+message MarketDataFeed {
+    enum Type {
+        LTP = 0;
+        FULL = 1;
+        FULL_D30 = 2;
+    }
+
+    message FeedResponse {
+        Type type = 1;
+        map<string, InstrumentData> feeds = 2;
+    }
+}
+
+message InstrumentData {
+    oneof data {
+        LTP ltp_data = 1;
+        Full full_data = 2;
+    }
+}
+
+message LTP {
+    double last_price = 1;
+    uint64 last_tick_time = 2;
+}
+
+message Full {
+    LTP ltp = 1;
+    uint64 volume_traded_today = 2;
+    double average_price = 3;
+    MarketDepth market_depth = 4;
+    OptionGreeks greeks = 5;
+    double close_price = 6;
+}
+
+message MarketDepth {
+    message Level {
+        int32 quantity = 1;
+        double price = 2;
+        int32 orders = 3;
+    }
+    repeated Level bids = 1;
+    repeated Level asks = 2;
+}
+
+message OptionGreeks {
+    double iv = 1;
+    double delta = 2;
+    double theta = 3;
+    double gamma = 4;
+    double vega = 5;
+    double theta_day = 6;
+    double vanna = 7;
+    double charm = 8;
+    double speed = 9;
+    double zomma = 10;
+    double color = 11;
+}

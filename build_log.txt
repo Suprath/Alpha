@@ -1,103 +1,314 @@
-#0 building with "desktop-linux" instance using docker driver
-
-#1 [internal] load build definition from Dockerfile
-#1 transferring dockerfile: 957B done
+ Image alpha-ingester:latest Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 559B done
 #1 DONE 0.0s
 
-#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
-#2 DONE 0.5s
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 1.04kB done
+#2 DONE 0.0s
 
 #3 [internal] load metadata for docker.io/library/gcc:13
-#3 DONE 0.5s
+#3 ...
 
-#4 [internal] load .dockerignore
-#4 transferring context: 2B done
-#4 DONE 0.0s
+#4 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#4 DONE 0.6s
 
-#5 [runtime 1/4] FROM docker.io/library/debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
-#5 resolve docker.io/library/debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a 0.0s done
+#3 [internal] load metadata for docker.io/library/gcc:13
+#3 DONE 0.6s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 2B done
 #5 DONE 0.0s
 
-#6 [runtime 2/4] RUN apt-get update && apt-get install -y     libboost-system1.81.0     && rm -rf /var/lib/apt/lists/*
+#6 [builder 1/6] FROM docker.io/library/gcc:13@sha256:60e15c3f7c419fd7a5c6eb5a22a30186ae4f073e39360b6d128a11e49a962386
+#6 resolve docker.io/library/gcc:13@sha256:60e15c3f7c419fd7a5c6eb5a22a30186ae4f073e39360b6d128a11e49a962386 0.0s done
 #6 CACHED
 
-#7 [runtime 3/4] WORKDIR /app
+#7 [runtime 1/4] FROM docker.io/library/debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
+#7 resolve docker.io/library/debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a 0.0s done
 #7 CACHED
 
-#8 [builder 1/6] FROM docker.io/library/gcc:13@sha256:60e15c3f7c419fd7a5c6eb5a22a30186ae4f073e39360b6d128a11e49a962386
-#8 resolve docker.io/library/gcc:13@sha256:60e15c3f7c419fd7a5c6eb5a22a30186ae4f073e39360b6d128a11e49a962386 0.0s done
+#8 [internal] load build context
+#8 transferring context: 7.58kB done
 #8 DONE 0.0s
 
-#9 [internal] load build context
-#9 transferring context: 3.89kB done
-#9 DONE 0.0s
+#9 [runtime 2/4] RUN apt-get update && apt-get install -y     libboost-system1.81.0     tzdata     && rm -rf /var/lib/apt/lists/*
+#9 0.558 Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+#9 0.723 Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+#9 0.902 Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [48.0 kB]
+#9 0.995 Get:4 http://deb.debian.org/debian bookworm/main arm64 Packages [8691 kB]
+#9 1.692 Get:5 http://deb.debian.org/debian bookworm-updates/main arm64 Packages [6936 B]
+#9 1.729 Get:6 http://deb.debian.org/debian-security bookworm-security/main arm64 Packages [290 kB]
+#9 2.278 Fetched 9242 kB in 2s (4454 kB/s)
+#9 2.278 Reading package lists...
+#9 2.617 Reading package lists...
+#9 2.854 Building dependency tree...
+#9 2.930 Reading state information...
+#9 3.019 tzdata is already the newest version (2025b-0+deb12u2).
+#9 3.019 tzdata set to manually installed.
+#9 3.019 The following NEW packages will be installed:
+#9 3.019   libboost-system1.81.0
+#9 3.113 0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.
+#9 3.113 Need to get 229 kB of archives.
+#9 3.113 After this operation, 2261 kB of additional disk space will be used.
+#9 3.113 Get:1 http://deb.debian.org/debian bookworm/main arm64 libboost-system1.81.0 arm64 1.81.0-5+deb12u1 [229 kB]
+#9 3.194 debconf: delaying package configuration, since apt-utils is not installed
+#9 3.201 Fetched 229 kB in 0s (2143 kB/s)
+#9 3.210 Selecting previously unselected package libboost-system1.81.0:arm64.
+#9 3.210 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 6090 files and directories currently installed.)
+#9 3.219 Preparing to unpack .../libboost-system1.81.0_1.81.0-5+deb12u1_arm64.deb ...
+#9 3.221 Unpacking libboost-system1.81.0:arm64 (1.81.0-5+deb12u1) ...
+#9 3.243 Setting up libboost-system1.81.0:arm64 (1.81.0-5+deb12u1) ...
+#9 3.246 Processing triggers for libc-bin (2.36-9+deb12u13) ...
+#9 DONE 3.3s
 
-#10 [builder 2/6] RUN apt-get update && apt-get install -y     cmake     libboost-system-dev     libboost-dev     libgtest-dev     && rm -rf /var/lib/apt/lists/*
-#10 CACHED
+#10 [builder 2/6] RUN apt-get update && apt-get install -y     cmake     libboost-system-dev     libboost-dev     libgtest-dev     libprotobuf-dev     protobuf-compiler     nlohmann-json3-dev     && rm -rf /var/lib/apt/lists/*
+#10 0.550 Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+#10 0.723 Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+#10 0.903 Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [48.0 kB]
+#10 1.000 Get:4 http://deb.debian.org/debian bookworm/main arm64 Packages [8691 kB]
+#10 1.692 Get:5 http://deb.debian.org/debian bookworm-updates/main arm64 Packages [6936 B]
+#10 1.729 Get:6 http://deb.debian.org/debian-security bookworm-security/main arm64 Packages [290 kB]
+#10 2.277 Fetched 9242 kB in 2s (4365 kB/s)
+#10 2.277 Reading package lists...
+#10 2.620 Reading package lists...
+#10 2.864 Building dependency tree...
+#10 2.939 Reading state information...
+#10 3.023 The following additional packages will be installed:
+#10 3.023   cmake-data googletest libarchive13 libboost-system1.74-dev
+#10 3.023   libboost-system1.74.0 libboost1.74-dev libjsoncpp25 libprotobuf-lite32
+#10 3.023   libprotobuf32 libprotoc32 librhash0 libuv1
+#10 3.024 Suggested packages:
+#10 3.024   cmake-doc cmake-format elpa-cmake-mode ninja-build lrzip libboost-doc
+#10 3.024   libboost1.74-doc libboost-atomic1.74-dev libboost-chrono1.74-dev
+#10 3.024   libboost-container1.74-dev libboost-context1.74-dev
+#10 3.024   libboost-contract1.74-dev libboost-coroutine1.74-dev
+#10 3.024   libboost-date-time1.74-dev libboost-exception1.74-dev libboost-fiber1.74-dev
+#10 3.024   libboost-filesystem1.74-dev libboost-graph1.74-dev
+#10 3.024   libboost-graph-parallel1.74-dev libboost-iostreams1.74-dev
+#10 3.024   libboost-locale1.74-dev libboost-log1.74-dev libboost-math1.74-dev
+#10 3.024   libboost-mpi1.74-dev libboost-mpi-python1.74-dev libboost-numpy1.74-dev
+#10 3.024   libboost-program-options1.74-dev libboost-python1.74-dev
+#10 3.024   libboost-random1.74-dev libboost-regex1.74-dev
+#10 3.024   libboost-serialization1.74-dev libboost-stacktrace1.74-dev
+#10 3.024   libboost-test1.74-dev libboost-thread1.74-dev libboost-timer1.74-dev
+#10 3.024   libboost-type-erasure1.74-dev libboost-wave1.74-dev libboost1.74-tools-dev
+#10 3.024   libmpfrc++-dev libntl-dev libboost-nowide1.74-dev protobuf-mode-el
+#10 3.087 The following NEW packages will be installed:
+#10 3.087   cmake cmake-data googletest libarchive13 libboost-dev libboost-system-dev
+#10 3.087   libboost-system1.74-dev libboost-system1.74.0 libboost1.74-dev libgtest-dev
+#10 3.087   libjsoncpp25 libprotobuf-dev libprotobuf-lite32 libprotobuf32 libprotoc32
+#10 3.087   librhash0 libuv1 nlohmann-json3-dev protobuf-compiler
+#10 3.151 0 upgraded, 19 newly installed, 0 to remove and 2 not upgraded.
+#10 3.151 Need to get 23.5 MB of archives.
+#10 3.151 After this operation, 210 MB of additional disk space will be used.
+#10 3.151 Get:1 http://deb.debian.org/debian bookworm/main arm64 libarchive13 arm64 3.6.2-1+deb12u3 [317 kB]
+#10 3.204 Get:2 http://deb.debian.org/debian bookworm/main arm64 libjsoncpp25 arm64 1.9.5-4 [72.3 kB]
+#10 3.214 Get:3 http://deb.debian.org/debian bookworm/main arm64 librhash0 arm64 1.4.3-3 [131 kB]
+#10 3.218 Get:4 http://deb.debian.org/debian bookworm/main arm64 libuv1 arm64 1.44.2-1+deb12u1 [130 kB]
+#10 3.232 Get:5 http://deb.debian.org/debian bookworm/main arm64 cmake-data all 3.25.1-1 [2026 kB]
+#10 ...
 
-#11 [builder 3/6] WORKDIR /app
-#11 CACHED
+#11 [runtime 3/4] WORKDIR /app
+#11 DONE 0.0s
 
-#12 [builder 4/6] COPY . .
+#10 [builder 2/6] RUN apt-get update && apt-get install -y     cmake     libboost-system-dev     libboost-dev     libgtest-dev     libprotobuf-dev     protobuf-compiler     nlohmann-json3-dev     && rm -rf /var/lib/apt/lists/*
+#10 3.304 Get:6 http://deb.debian.org/debian bookworm/main arm64 cmake arm64 3.25.1-1 [6806 kB]
+#10 3.527 Get:7 http://deb.debian.org/debian bookworm/main arm64 googletest all 1.12.1-0.2 [506 kB]
+#10 3.563 Get:8 http://deb.debian.org/debian bookworm/main arm64 libboost1.74-dev arm64 1.74.0+ds1-21 [9508 kB]
+#10 3.946 Get:9 http://deb.debian.org/debian bookworm/main arm64 libboost-dev arm64 1.74.0.3 [4548 B]
+#10 3.946 Get:10 http://deb.debian.org/debian bookworm/main arm64 libboost-system1.74.0 arm64 1.74.0+ds1-21 [218 kB]
+#10 3.956 Get:11 http://deb.debian.org/debian bookworm/main arm64 libboost-system1.74-dev arm64 1.74.0+ds1-21 [219 kB]
+#10 3.960 Get:12 http://deb.debian.org/debian bookworm/main arm64 libboost-system-dev arm64 1.74.0.3 [4468 B]
+#10 3.960 Get:13 http://deb.debian.org/debian bookworm/main arm64 libgtest-dev arm64 1.12.1-0.2 [231 kB]
+#10 3.971 Get:14 http://deb.debian.org/debian bookworm/main arm64 libprotobuf32 arm64 3.21.12-3 [821 kB]
+#10 3.989 Get:15 http://deb.debian.org/debian bookworm/main arm64 libprotobuf-lite32 arm64 3.21.12-3 [240 kB]
+#10 4.001 Get:16 http://deb.debian.org/debian bookworm/main arm64 libprotobuf-dev arm64 3.21.12-3 [1219 kB]
+#10 4.044 Get:17 http://deb.debian.org/debian bookworm/main arm64 libprotoc32 arm64 3.21.12-3 [718 kB]
+#10 4.067 Get:18 http://deb.debian.org/debian bookworm/main arm64 nlohmann-json3-dev all 3.11.2-2 [259 kB]
+#10 4.071 Get:19 http://deb.debian.org/debian bookworm/main arm64 protobuf-compiler arm64 3.21.12-3 [83.9 kB]
+#10 4.156 debconf: delaying package configuration, since apt-utils is not installed
+#10 4.166 Fetched 23.5 MB in 1s (23.9 MB/s)
+#10 4.175 Selecting previously unselected package libarchive13:arm64.
+#10 4.175 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 23319 files and directories currently installed.)
+#10 4.181 Preparing to unpack .../00-libarchive13_3.6.2-1+deb12u3_arm64.deb ...
+#10 4.183 Unpacking libarchive13:arm64 (3.6.2-1+deb12u3) ...
+#10 4.205 Selecting previously unselected package libjsoncpp25:arm64.
+#10 4.206 Preparing to unpack .../01-libjsoncpp25_1.9.5-4_arm64.deb ...
+#10 4.207 Unpacking libjsoncpp25:arm64 (1.9.5-4) ...
+#10 4.218 Selecting previously unselected package librhash0:arm64.
+#10 4.218 Preparing to unpack .../02-librhash0_1.4.3-3_arm64.deb ...
+#10 4.219 Unpacking librhash0:arm64 (1.4.3-3) ...
+#10 4.232 Selecting previously unselected package libuv1:arm64.
+#10 4.233 Preparing to unpack .../03-libuv1_1.44.2-1+deb12u1_arm64.deb ...
+#10 4.234 Unpacking libuv1:arm64 (1.44.2-1+deb12u1) ...
+#10 4.251 Selecting previously unselected package cmake-data.
+#10 4.252 Preparing to unpack .../04-cmake-data_3.25.1-1_all.deb ...
+#10 4.254 Unpacking cmake-data (3.25.1-1) ...
+#10 4.389 Selecting previously unselected package cmake.
+#10 4.391 Preparing to unpack .../05-cmake_3.25.1-1_arm64.deb ...
+#10 4.392 Unpacking cmake (3.25.1-1) ...
+#10 4.677 Selecting previously unselected package googletest.
+#10 4.678 Preparing to unpack .../06-googletest_1.12.1-0.2_all.deb ...
+#10 4.678 Unpacking googletest (1.12.1-0.2) ...
+#10 4.726 Selecting previously unselected package libboost1.74-dev:arm64.
+#10 4.727 Preparing to unpack .../07-libboost1.74-dev_1.74.0+ds1-21_arm64.deb ...
+#10 4.728 Unpacking libboost1.74-dev:arm64 (1.74.0+ds1-21) ...
+#10 5.561 Selecting previously unselected package libboost-dev:arm64.
+#10 5.564 Preparing to unpack .../08-libboost-dev_1.74.0.3_arm64.deb ...
+#10 5.565 Unpacking libboost-dev:arm64 (1.74.0.3) ...
+#10 5.572 Selecting previously unselected package libboost-system1.74.0:arm64.
+#10 5.574 Preparing to unpack .../09-libboost-system1.74.0_1.74.0+ds1-21_arm64.deb ...
+#10 5.575 Unpacking libboost-system1.74.0:arm64 (1.74.0+ds1-21) ...
+#10 5.592 Selecting previously unselected package libboost-system1.74-dev:arm64.
+#10 5.594 Preparing to unpack .../10-libboost-system1.74-dev_1.74.0+ds1-21_arm64.deb ...
+#10 5.594 Unpacking libboost-system1.74-dev:arm64 (1.74.0+ds1-21) ...
+#10 5.611 Selecting previously unselected package libboost-system-dev:arm64.
+#10 5.613 Preparing to unpack .../11-libboost-system-dev_1.74.0.3_arm64.deb ...
+#10 5.614 Unpacking libboost-system-dev:arm64 (1.74.0.3) ...
+#10 5.620 Selecting previously unselected package libgtest-dev:arm64.
+#10 5.622 Preparing to unpack .../12-libgtest-dev_1.12.1-0.2_arm64.deb ...
+#10 5.623 Unpacking libgtest-dev:arm64 (1.12.1-0.2) ...
+#10 5.641 Selecting previously unselected package libprotobuf32:arm64.
+#10 5.643 Preparing to unpack .../13-libprotobuf32_3.21.12-3_arm64.deb ...
+#10 5.644 Unpacking libprotobuf32:arm64 (3.21.12-3) ...
+#10 5.688 Selecting previously unselected package libprotobuf-lite32:arm64.
+#10 5.689 Preparing to unpack .../14-libprotobuf-lite32_3.21.12-3_arm64.deb ...
+#10 5.690 Unpacking libprotobuf-lite32:arm64 (3.21.12-3) ...
+#10 5.707 Selecting previously unselected package libprotobuf-dev:arm64.
+#10 5.709 Preparing to unpack .../15-libprotobuf-dev_3.21.12-3_arm64.deb ...
+#10 5.710 Unpacking libprotobuf-dev:arm64 (3.21.12-3) ...
+#10 5.779 Selecting previously unselected package libprotoc32:arm64.
+#10 5.782 Preparing to unpack .../16-libprotoc32_3.21.12-3_arm64.deb ...
+#10 5.783 Unpacking libprotoc32:arm64 (3.21.12-3) ...
+#10 5.822 Selecting previously unselected package nlohmann-json3-dev.
+#10 5.824 Preparing to unpack .../17-nlohmann-json3-dev_3.11.2-2_all.deb ...
+#10 5.825 Unpacking nlohmann-json3-dev (3.11.2-2) ...
+#10 5.854 Selecting previously unselected package protobuf-compiler.
+#10 5.856 Preparing to unpack .../18-protobuf-compiler_3.21.12-3_arm64.deb ...
+#10 5.857 Unpacking protobuf-compiler (3.21.12-3) ...
+#10 5.872 Setting up libboost-system1.74.0:arm64 (1.74.0+ds1-21) ...
+#10 5.875 Setting up libboost1.74-dev:arm64 (1.74.0+ds1-21) ...
+#10 5.878 Setting up libarchive13:arm64 (3.6.2-1+deb12u3) ...
+#10 5.881 Setting up googletest (1.12.1-0.2) ...
+#10 5.884 Setting up libuv1:arm64 (1.44.2-1+deb12u1) ...
+#10 5.886 Setting up libboost-system1.74-dev:arm64 (1.74.0+ds1-21) ...
+#10 5.888 Setting up libjsoncpp25:arm64 (1.9.5-4) ...
+#10 5.890 Setting up libprotobuf32:arm64 (3.21.12-3) ...
+#10 5.892 Setting up librhash0:arm64 (1.4.3-3) ...
+#10 5.894 Setting up libprotobuf-lite32:arm64 (3.21.12-3) ...
+#10 5.897 Setting up cmake-data (3.25.1-1) ...
+#10 5.901 Setting up libboost-dev:arm64 (1.74.0.3) ...
+#10 5.903 Setting up nlohmann-json3-dev (3.11.2-2) ...
+#10 5.905 Setting up libprotoc32:arm64 (3.21.12-3) ...
+#10 5.907 Setting up libgtest-dev:arm64 (1.12.1-0.2) ...
+#10 5.909 Setting up protobuf-compiler (3.21.12-3) ...
+#10 5.912 Setting up libboost-system-dev:arm64 (1.74.0.3) ...
+#10 5.914 Setting up libprotobuf-dev:arm64 (3.21.12-3) ...
+#10 5.916 Setting up cmake (3.25.1-1) ...
+#10 5.919 Processing triggers for libc-bin (2.36-9+deb12u13) ...
+#10 DONE 6.1s
+
+#12 [builder 3/6] WORKDIR /app
 #12 DONE 0.0s
 
-#13 [builder 5/6] WORKDIR /app/services/ingester
+#13 [builder 4/6] COPY . .
 #13 DONE 0.0s
 
-#14 [builder 6/6] RUN mkdir -p build && cd build &&     cmake .. &&     make -j$(nproc)
-#14 0.191 -- The CXX compiler identification is GNU 13.4.0
-#14 0.197 -- Detecting CXX compiler ABI info
-#14 0.245 -- Detecting CXX compiler ABI info - done
-#14 0.249 -- Check for working CXX compiler: /usr/local/bin/c++ - skipped
-#14 0.249 -- Detecting CXX compile features
-#14 0.250 -- Detecting CXX compile features - done
-#14 0.253 -- Found Boost: /usr/lib/aarch64-linux-gnu/cmake/Boost-1.74.0/BoostConfig.cmake (found version "1.74.0") found components: system 
-#14 0.254 -- Performing Test CMAKE_HAVE_LIBC_PTHREAD
-#14 0.305 -- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
-#14 0.306 -- Found Threads: TRUE  
-#14 0.308 -- Found GTest: /usr/lib/aarch64-linux-gnu/cmake/GTest/GTestConfig.cmake (found version "1.12.1")  
-#14 0.308 -- Configuring done
-#14 0.310 -- Generating done
-#14 0.311 -- Build files have been written to: /app/services/ingester/build
-#14 0.328 [ 25%] Building CXX object CMakeFiles/alpha-ingester.dir/src/main.cpp.o
-#14 0.328 [ 50%] Building CXX object CMakeFiles/alpha-ingester-test.dir/app/tests/unit/ingester_test.cpp.o
-#14 0.983 In file included from /usr/include/boost/asio.hpp:23,
-#14 0.983                  from /app/services/ingester/src/main.cpp:4:
-#14 0.983 /usr/include/boost/asio/awaitable.hpp: In constructor 'boost::asio::awaitable<T, Executor>::awaitable(boost::asio::awaitable<T, Executor>&&)':
-#14 0.983 /usr/include/boost/asio/awaitable.hpp:68:19: error: 'exchange' is not a member of 'std'
-#14 0.983    68 |     : frame_(std::exchange(other.frame_, nullptr))
-#14 0.983       |                   ^~~~~~~~
-#14 0.983 /usr/include/boost/asio/awaitable.hpp:31:1: note: 'std::exchange' is defined in header '<utility>'; did you forget to '#include <utility>'?
-#14 0.983    30 | #include <boost/asio/detail/push_options.hpp>
-#14 0.983   +++ |+#include <utility>
-#14 0.983    31 | 
-#14 1.075 [ 75%] Linking CXX executable alpha-ingester-test
-#14 1.113 [ 75%] Built target alpha-ingester-test
-#14 1.524 make[2]: *** [CMakeFiles/alpha-ingester.dir/build.make:76: CMakeFiles/alpha-ingester.dir/src/main.cpp.o] Error 1
-#14 1.524 make[1]: *** [CMakeFiles/Makefile2:85: CMakeFiles/alpha-ingester.dir/all] Error 2
-#14 1.524 make: *** [Makefile:101: all] Error 2
-#14 ERROR: process "/bin/sh -c mkdir -p build && cd build &&     cmake .. &&     make -j$(nproc)" did not complete successfully: exit code: 2
+#14 [builder 5/6] WORKDIR /app/services/ingester
+#14 DONE 0.0s
+
+#15 [builder 6/6] RUN mkdir -p build && cd build &&     cmake .. &&     make -j$(nproc)
+#15 0.119 -- The CXX compiler identification is GNU 13.4.0
+#15 0.123 -- Detecting CXX compiler ABI info
+#15 0.164 -- Detecting CXX compiler ABI info - done
+#15 0.168 -- Check for working CXX compiler: /usr/local/bin/c++ - skipped
+#15 0.169 -- Detecting CXX compile features
+#15 0.169 -- Detecting CXX compile features - done
+#15 0.172 -- Found Boost: /usr/lib/aarch64-linux-gnu/cmake/Boost-1.74.0/BoostConfig.cmake (found version "1.74.0") found components: system 
+#15 0.172 -- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+#15 0.217 -- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+#15 0.217 -- Found Threads: TRUE  
+#15 0.223 -- Found Protobuf: /usr/lib/aarch64-linux-gnu/libprotobuf.so (found version "3.21.12") 
+#15 0.225 -- Found GTest: /usr/lib/aarch64-linux-gnu/cmake/GTest/GTestConfig.cmake (found version "1.12.1")  
+#15 0.226 -- Configuring done
+#15 0.227 -- Generating done
+#15 0.228 -- Build files have been written to: /app/services/ingester/build
+#15 0.240 [ 14%] Running cpp protocol buffer compiler on ../../shared/proto/market_data_v3.proto
+#15 0.244 [ 28%] Building CXX object CMakeFiles/alpha-ingester-test.dir/app/tests/unit/ingester_test.cpp.o
+#15 0.256 [ 42%] Building CXX object CMakeFiles/alpha-ingester.dir/src/main.cpp.o
+#15 0.256 [ 71%] Building CXX object CMakeFiles/alpha-ingester.dir/src/UpstoxIngester.cpp.o
+#15 0.256 [ 71%] Building CXX object CMakeFiles/alpha-ingester.dir/market_data_v3.pb.cc.o
+#15 1.004 [ 85%] Linking CXX executable alpha-ingester-test
+#15 1.041 [ 85%] Built target alpha-ingester-test
+#15 1.072 In file included from /usr/include/boost/asio.hpp:23,
+#15 1.072                  from /app/services/ingester/include/alpha/ingester/UpstoxIngester.hpp:6,
+#15 1.072                  from /app/services/ingester/src/main.cpp:3:
+#15 1.072 /usr/include/boost/asio/awaitable.hpp: In constructor 'boost::asio::awaitable<T, Executor>::awaitable(boost::asio::awaitable<T, Executor>&&)':
+#15 1.072 /usr/include/boost/asio/awaitable.hpp:68:19: error: 'exchange' is not a member of 'std'
+#15 1.072    68 |     : frame_(std::exchange(other.frame_, nullptr))
+#15 1.072       |                   ^~~~~~~~
+#15 1.072 /usr/include/boost/asio/awaitable.hpp:31:1: note: 'std::exchange' is defined in header '<utility>'; did you forget to '#include <utility>'?
+#15 1.072    30 | #include <boost/asio/detail/push_options.hpp>
+#15 1.072   +++ |+#include <utility>
+#15 1.072    31 | 
+#15 1.114 In file included from /usr/include/boost/asio.hpp:23,
+#15 1.114                  from /app/services/ingester/include/alpha/ingester/UpstoxIngester.hpp:6,
+#15 1.114                  from /app/services/ingester/src/UpstoxIngester.cpp:1:
+#15 1.114 /usr/include/boost/asio/awaitable.hpp: In constructor 'boost::asio::awaitable<T, Executor>::awaitable(boost::asio::awaitable<T, Executor>&&)':
+#15 1.114 /usr/include/boost/asio/awaitable.hpp:68:19: error: 'exchange' is not a member of 'std'
+#15 1.114    68 |     : frame_(std::exchange(other.frame_, nullptr))
+#15 1.114       |                   ^~~~~~~~
+#15 1.115 /usr/include/boost/asio/awaitable.hpp:31:1: note: 'std::exchange' is defined in header '<utility>'; did you forget to '#include <utility>'?
+#15 1.115    30 | #include <boost/asio/detail/push_options.hpp>
+#15 1.115   +++ |+#include <utility>
+#15 1.115    31 | 
+#15 2.286 /app/services/ingester/src/UpstoxIngester.cpp: In member function 'std::vector<alpha::models::Candle> alpha::ingester::UpstoxIngester::fetch_historical(const std::string&, const std::string&, const std::string&, const std::string&)':
+#15 2.286 /app/services/ingester/src/UpstoxIngester.cpp:70:71: error: unused parameter 'from' [-Werror=unused-parameter]
+#15 2.286    70 |                                                    const std::string& from,
+#15 2.286       |                                                    ~~~~~~~~~~~~~~~~~~~^~~~
+#15 2.286 /app/services/ingester/src/UpstoxIngester.cpp:71:71: error: unused parameter 'to' [-Werror=unused-parameter]
+#15 2.286    71 |                                                    const std::string& to) {
+#15 2.286       |                                                    ~~~~~~~~~~~~~~~~~~~^~
+#15 2.368 make[2]: *** [CMakeFiles/alpha-ingester.dir/build.make:84: CMakeFiles/alpha-ingester.dir/src/main.cpp.o] Error 1
+#15 2.368 make[2]: *** Waiting for unfinished jobs....
+#15 2.765 cc1plus: all warnings being treated as errors
+#15 2.767 make[2]: *** [CMakeFiles/alpha-ingester.dir/build.make:98: CMakeFiles/alpha-ingester.dir/src/UpstoxIngester.cpp.o] Error 1
+#15 2.767 make[1]: *** [CMakeFiles/Makefile2:85: CMakeFiles/alpha-ingester.dir/all] Error 2
+#15 2.768 make: *** [Makefile:101: all] Error 2
+#15 ERROR: process "/bin/sh -c mkdir -p build && cd build &&     cmake .. &&     make -j$(nproc)" did not complete successfully: exit code: 2
 ------
  > [builder 6/6] RUN mkdir -p build && cd build &&     cmake .. &&     make -j$(nproc):
-0.983       |                   ^~~~~~~~
-0.983 /usr/include/boost/asio/awaitable.hpp:31:1: note: 'std::exchange' is defined in header '<utility>'; did you forget to '#include <utility>'?
-0.983    30 | #include <boost/asio/detail/push_options.hpp>
-0.983   +++ |+#include <utility>
-0.983    31 | 
-1.075 [ 75%] Linking CXX executable alpha-ingester-test
-1.113 [ 75%] Built target alpha-ingester-test
-1.524 make[2]: *** [CMakeFiles/alpha-ingester.dir/build.make:76: CMakeFiles/alpha-ingester.dir/src/main.cpp.o] Error 1
-1.524 make[1]: *** [CMakeFiles/Makefile2:85: CMakeFiles/alpha-ingester.dir/all] Error 2
-1.524 make: *** [Makefile:101: all] Error 2
+2.286       |                                                    ~~~~~~~~~~~~~~~~~~~^~~~
+2.286 /app/services/ingester/src/UpstoxIngester.cpp:71:71: error: unused parameter 'to' [-Werror=unused-parameter]
+2.286    71 |                                                    const std::string& to) {
+2.286       |                                                    ~~~~~~~~~~~~~~~~~~~^~
+2.368 make[2]: *** [CMakeFiles/alpha-ingester.dir/build.make:84: CMakeFiles/alpha-ingester.dir/src/main.cpp.o] Error 1
+2.368 make[2]: *** Waiting for unfinished jobs....
+2.765 cc1plus: all warnings being treated as errors
+2.767 make[2]: *** [CMakeFiles/alpha-ingester.dir/build.make:98: CMakeFiles/alpha-ingester.dir/src/UpstoxIngester.cpp.o] Error 1
+2.767 make[1]: *** [CMakeFiles/Makefile2:85: CMakeFiles/alpha-ingester.dir/all] Error 2
+2.768 make: *** [Makefile:101: all] Error 2
 ------
-Dockerfile:21
---------------------
-  20 |     WORKDIR /app/services/ingester
-  21 | >>> RUN mkdir -p build && cd build && \
-  22 | >>>     cmake .. && \
-  23 | >>>     make -j$(nproc)
-  24 |     
---------------------
-ERROR: failed to build: failed to solve: process "/bin/sh -c mkdir -p build && cd build &&     cmake .. &&     make -j$(nproc)" did not complete successfully: exit code: 2
+Dockerfile:24
 
-View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux/mekg0zdqcd1kc0ov9pwb3kjum
+--------------------
+
+  23 |     WORKDIR /app/services/ingester
+
+  24 | >>> RUN mkdir -p build && cd build && \
+
+  25 | >>>     cmake .. && \
+
+  26 | >>>     make -j$(nproc)
+
+  27 |     
+
+--------------------
+
+failed to solve: process "/bin/sh -c mkdir -p build && cd build &&     cmake .. &&     make -j$(nproc)" did not complete successfully: exit code: 2
+
+
+
+View build details: docker-desktop://dashboard/build/default/default/zqp1n1b20ydt4o3lz49222m4i
+

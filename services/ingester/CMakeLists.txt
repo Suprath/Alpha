@@ -7,15 +7,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Find Dependencies
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(Threads REQUIRED)
+find_package(Protobuf REQUIRED)
+# nlohmann_json is often a header-only library, we'll assume it's in the include paths
+
+# Generate Protobuf classes
+set(PROTO_FILE ../../shared/proto/market_data_v3.proto)
+protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILE})
 
 # Include directories
 include_directories(include)
-include_directories(/usr/local/include) # Shared headers path or system paths
+include_directories(${CMAKE_CURRENT_BINARY_DIR}) # For generated proto headers
 include_directories(../../shared/cpp/include)
 
 # Source files
 set(SOURCES
     src/main.cpp
+    src/UpstoxIngester.cpp
+    ${PROTO_SRCS}
 )
 
 # Executable
@@ -24,10 +32,17 @@ add_executable(alpha-ingester ${SOURCES})
 # Testing (as per project rules)
 enable_testing()
 find_package(GTest REQUIRED)
-add_executable(alpha-ingester-test ../../tests/unit/ingester_test.cpp)
+add_executable(alpha-ingester-test 
+    ../../tests/unit/ingester_normalization_test.cpp
+    ../../tests/unit/options_decode_test.cpp
+    ../../tests/unit/rate_limiter_test.cpp
+    src/UpstoxIngester.cpp 
+    ${PROTO_SRCS}
+)
 target_link_libraries(alpha-ingester-test
     GTest::gtest_main
     Threads::Threads
+    ${Protobuf_LIBRARIES}
 )
 add_test(NAME IngesterUnitTests COMMAND alpha-ingester-test)
 
@@ -35,13 +50,12 @@ add_test(NAME IngesterUnitTests COMMAND alpha-ingester-test)
 target_link_libraries(alpha-ingester
     Boost::system
     Threads::Threads
+    ${Protobuf_LIBRARIES}
 )
 
-# Optimization Flags for HFT
+# Optimization Flags for HFT Development
 target_compile_options(alpha-ingester PRIVATE
-    -O3
-    -march=native
-    -flto
+    -O2
     -Wall
     -Wextra
     -Werror

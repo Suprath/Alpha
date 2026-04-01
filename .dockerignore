@@ -1,0 +1,33 @@
+# Git
+.git
+.gitignore
+
+# Build files and directories
+**/build/
+**/cmake-build-*/
+**/.cache/
+**/Testing/
+**/*.o
+**/*.obj
+**/*.a
+**/*.dylib
+**/*.so
+**/*.dll
+
+# Environment
+.env
+
+# Logs and databases
+*.log
+*.sqlite
+redis_data/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+
+# Temporary files
+*.tmp
+*.bak
+*.swp

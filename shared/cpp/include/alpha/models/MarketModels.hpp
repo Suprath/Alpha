@@ -1,0 +1,91 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+#include <array>
+#include <alpha/time/Timestamp.hpp>
+
+namespace alpha::models {
+
+/**
+ * @brief 5-level Market Depth level.
+ */
+struct MarketDepthLevel {
+    double price;
+    uint32_t quantity;
+    uint32_t orders;
+};
+
+/**
+ * @brief Options Greeks for a single contract.
+ */
+struct OptionGreeks {
+    double delta;
+    double gamma;
+    double theta;
+    double vega;
+    double iv;
+};
+
+/**
+ * @brief High-resolution Market Tick (L1 + L2).
+ * Fixed-size POD for zero-copy shared memory.
+ */
+struct Tick {
+    uint64_t timestamp_ns;      // Alpha Internal IST Precision
+    uint64_t exchange_time_ns;  // Exchange-provided timestamp
+    double last_price;
+    uint32_t last_quantity;
+    uint64_t total_volume;
+    double vwap;
+    
+    // Market Depth (L2) - 5 levels as per Upstox V3
+    MarketDepthLevel bids[5];
+    MarketDepthLevel asks[5];
+    
+    // Optional Greeks (0.0 if not applicable)
+    OptionGreeks greeks;
+};
+
+/**
+ * @brief Historical OHLCV Candle.
+ */
+struct Candle {
+    uint64_t timestamp_ns; // Start of period
+    double open;
+    double high;
+    double low;
+    double close;
+    uint64_t volume;
+    int32_t open_interest;
+
+    /**
+     * @brief Normalize candle to 4 synthetic ticks clustered at the end of the specified interval.
+     * @param interval_ns The dynamic duration of the candle in nanoseconds. Defaults to 1 minute.
+     * @return Array of 4 Ticks {Open, High, Low, Close} allocated on the stack.
+     */
+    inline std::array<Tick, 4> normalize_to_ticks(uint64_t interval_ns = 59999000000ULL) const {
+        std::array<Tick, 4> ticks;
+        
+        // Per user request, all synthetic ticks are clustered at the end (e.g. HH:MM:59.999...)
+        uint64_t end_ts = timestamp_ns + interval_ns;
+        
+        // Open, High, Low, Close
+        auto create_tick = [&](double p) {
+            Tick t {};
+            t.timestamp_ns = end_ts;
+            t.last_price = p;
+            return t;
+        };
+
+        ticks[0] = create_tick(open);
+        ticks[1] = create_tick(high);
+        ticks[2] = create_tick(low);
+        ticks[3] = create_tick(close);
+
+        return ticks;
+    }
+};
+
+} // namespace alpha::models
