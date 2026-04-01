@@ -17,3 +17,26 @@
 # System files
 .DS_Store
 Thumbs.db
+
+# C++ Build & Binaries
+/build/
+/bin/
+/out/
+*.o
+*.a
+*.so
+
+# Python Artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+htmlcov/

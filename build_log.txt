@@ -1,0 +1,103 @@
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 957B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.5s
+
+#3 [internal] load metadata for docker.io/library/gcc:13
+#3 DONE 0.5s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 2B done
+#4 DONE 0.0s
+
+#5 [runtime 1/4] FROM docker.io/library/debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
+#5 resolve docker.io/library/debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a 0.0s done
+#5 DONE 0.0s
+
+#6 [runtime 2/4] RUN apt-get update && apt-get install -y     libboost-system1.81.0     && rm -rf /var/lib/apt/lists/*
+#6 CACHED
+
+#7 [runtime 3/4] WORKDIR /app
+#7 CACHED
+
+#8 [builder 1/6] FROM docker.io/library/gcc:13@sha256:60e15c3f7c419fd7a5c6eb5a22a30186ae4f073e39360b6d128a11e49a962386
+#8 resolve docker.io/library/gcc:13@sha256:60e15c3f7c419fd7a5c6eb5a22a30186ae4f073e39360b6d128a11e49a962386 0.0s done
+#8 DONE 0.0s
+
+#9 [internal] load build context
+#9 transferring context: 3.89kB done
+#9 DONE 0.0s
+
+#10 [builder 2/6] RUN apt-get update && apt-get install -y     cmake     libboost-system-dev     libboost-dev     libgtest-dev     && rm -rf /var/lib/apt/lists/*
+#10 CACHED
+
+#11 [builder 3/6] WORKDIR /app
+#11 CACHED
+
+#12 [builder 4/6] COPY . .
+#12 DONE 0.0s
+
+#13 [builder 5/6] WORKDIR /app/services/ingester
+#13 DONE 0.0s
+
+#14 [builder 6/6] RUN mkdir -p build && cd build &&     cmake .. &&     make -j$(nproc)
+#14 0.191 -- The CXX compiler identification is GNU 13.4.0
+#14 0.197 -- Detecting CXX compiler ABI info
+#14 0.245 -- Detecting CXX compiler ABI info - done
+#14 0.249 -- Check for working CXX compiler: /usr/local/bin/c++ - skipped
+#14 0.249 -- Detecting CXX compile features
+#14 0.250 -- Detecting CXX compile features - done
+#14 0.253 -- Found Boost: /usr/lib/aarch64-linux-gnu/cmake/Boost-1.74.0/BoostConfig.cmake (found version "1.74.0") found components: system 
+#14 0.254 -- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+#14 0.305 -- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+#14 0.306 -- Found Threads: TRUE  
+#14 0.308 -- Found GTest: /usr/lib/aarch64-linux-gnu/cmake/GTest/GTestConfig.cmake (found version "1.12.1")  
+#14 0.308 -- Configuring done
+#14 0.310 -- Generating done
+#14 0.311 -- Build files have been written to: /app/services/ingester/build
+#14 0.328 [ 25%] Building CXX object CMakeFiles/alpha-ingester.dir/src/main.cpp.o
+#14 0.328 [ 50%] Building CXX object CMakeFiles/alpha-ingester-test.dir/app/tests/unit/ingester_test.cpp.o
+#14 0.983 In file included from /usr/include/boost/asio.hpp:23,
+#14 0.983                  from /app/services/ingester/src/main.cpp:4:
+#14 0.983 /usr/include/boost/asio/awaitable.hpp: In constructor 'boost::asio::awaitable<T, Executor>::awaitable(boost::asio::awaitable<T, Executor>&&)':
+#14 0.983 /usr/include/boost/asio/awaitable.hpp:68:19: error: 'exchange' is not a member of 'std'
+#14 0.983    68 |     : frame_(std::exchange(other.frame_, nullptr))
+#14 0.983       |                   ^~~~~~~~
+#14 0.983 /usr/include/boost/asio/awaitable.hpp:31:1: note: 'std::exchange' is defined in header '<utility>'; did you forget to '#include <utility>'?
+#14 0.983    30 | #include <boost/asio/detail/push_options.hpp>
+#14 0.983   +++ |+#include <utility>
+#14 0.983    31 | 
+#14 1.075 [ 75%] Linking CXX executable alpha-ingester-test
+#14 1.113 [ 75%] Built target alpha-ingester-test
+#14 1.524 make[2]: *** [CMakeFiles/alpha-ingester.dir/build.make:76: CMakeFiles/alpha-ingester.dir/src/main.cpp.o] Error 1
+#14 1.524 make[1]: *** [CMakeFiles/Makefile2:85: CMakeFiles/alpha-ingester.dir/all] Error 2
+#14 1.524 make: *** [Makefile:101: all] Error 2
+#14 ERROR: process "/bin/sh -c mkdir -p build && cd build &&     cmake .. &&     make -j$(nproc)" did not complete successfully: exit code: 2
+------
+ > [builder 6/6] RUN mkdir -p build && cd build &&     cmake .. &&     make -j$(nproc):
+0.983       |                   ^~~~~~~~
+0.983 /usr/include/boost/asio/awaitable.hpp:31:1: note: 'std::exchange' is defined in header '<utility>'; did you forget to '#include <utility>'?
+0.983    30 | #include <boost/asio/detail/push_options.hpp>
+0.983   +++ |+#include <utility>
+0.983    31 | 
+1.075 [ 75%] Linking CXX executable alpha-ingester-test
+1.113 [ 75%] Built target alpha-ingester-test
+1.524 make[2]: *** [CMakeFiles/alpha-ingester.dir/build.make:76: CMakeFiles/alpha-ingester.dir/src/main.cpp.o] Error 1
+1.524 make[1]: *** [CMakeFiles/Makefile2:85: CMakeFiles/alpha-ingester.dir/all] Error 2
+1.524 make: *** [Makefile:101: all] Error 2
+------
+Dockerfile:21
+--------------------
+  20 |     WORKDIR /app/services/ingester
+  21 | >>> RUN mkdir -p build && cd build && \
+  22 | >>>     cmake .. && \
+  23 | >>>     make -j$(nproc)
+  24 |     
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c mkdir -p build && cd build &&     cmake .. &&     make -j$(nproc)" did not complete successfully: exit code: 2
+
+View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux/mekg0zdqcd1kc0ov9pwb3kjum

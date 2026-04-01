@@ -1,0 +1,24 @@
+services:
+  ingester:
+    build:
+      context: .
+      dockerfile: services/ingester/Dockerfile
+    image: alpha-ingester:latest
+    container_name: alpha-ingester
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      - TZ=Asia/Kolkata
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    # ipc: host is required for ultra-low latency shared memory IPC later
+    ipc: host
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+# Future services will be added here with the same TZ and volume mounts
