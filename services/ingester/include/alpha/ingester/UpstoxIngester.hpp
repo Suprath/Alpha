@@ -9,6 +9,11 @@
 #include <alpha/models/MarketModels.hpp>
 #include <alpha/rate_limit/RateLimiter.hpp>
 #include "market_data_v3.pb.h"
+#include <unordered_map>
+#include <pqxx/pqxx>
+
+#include <alpha/ipc/ShmManager.hpp>
+#include <alpha/ipc/RingBuffer.hpp>
 
 namespace alpha::ingester {
 
@@ -26,7 +31,7 @@ using tcp = boost::asio::ip::tcp;
  */
 class UpstoxIngester {
 public:
-    UpstoxIngester(net::io_context& ioc);
+    UpstoxIngester(net::io_context& ioc, bool with_db = true);
 
     /**
      * @brief Perform manual OAuth token exchange.
@@ -51,15 +56,28 @@ public:
                                         const std::string& from, 
                                         const std::string& to);
 
-private:
+    // Testing Interface
+    void inject_manual_instrument_for_testing(const std::string& key, uint32_t token);
     void on_message(const std::string& data);
+
+private:
     void save_token(const std::string& token);
     std::string load_token();
+    void schedule_heartbeat();
+    void load_instruments_from_db();
 
     net::io_context& ioc_;
     std::string access_token_;
     std::unique_ptr<websocket::stream<beast::tcp_stream>> ws_;
     std::unique_ptr<RateLimiter> rest_limiter_;
+    
+    // DB Context
+    std::unordered_map<std::string, uint32_t> instrument_map_;
+
+    // IPC Memory Management
+    std::unique_ptr<alpha::ipc::ShmManager> shm_manager_;
+    alpha::ipc::SPSCRingBuffer<Tick, 65536>* ring_buffer_{nullptr};
+    net::steady_timer heartbeat_timer_;
 };
 
 } // namespace alpha::ingester

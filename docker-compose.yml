@@ -10,6 +10,11 @@ services:
       - "9000:9000"
     environment:
       - TZ=Asia/Kolkata
+      - POSTGRES_HOST=postgres-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=alpha_db
+      - POSTGRES_USER=alpha_user
+      - POSTGRES_PASSWORD=alpha_password
     env_file:
       - .env
     volumes:
@@ -25,6 +30,72 @@ services:
         limits:
           cpus: '1.0'
           memory: 512M
+
+  postgres-db:
+    image: postgres:15-alpine
+    container_name: alpha-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=alpha_db
+      - POSTGRES_USER=alpha_user
+      - POSTGRES_PASSWORD=alpha_password
+    volumes:
+      - alpha_pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: alpha-pgadmin
+    restart: unless-stopped
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@alpha.hft
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres-db
+
+  instrument-worker:
+    build:
+      context: ./services/instrument_worker
+      dockerfile: Dockerfile
+    image: alpha-instrument-worker:latest
+    container_name: alpha-instrument-worker
+    restart: "no" # It's a job, it crashes or succeeds and stops until tomorrow
+    environment:
+      - POSTGRES_HOST=postgres-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=alpha_db
+      - POSTGRES_USER=alpha_user
+      - POSTGRES_PASSWORD=alpha_password
+      - TEST_MODE=1  # Pull only 3 mock instruments
+    depends_on:
+      - postgres-db
+
+  signal-engine:
+    build:
+      context: .
+      dockerfile: services/signal_engine/Dockerfile
+    image: alpha-signal-engine:latest
+    container_name: alpha-signal-engine
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Kolkata
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - alpha_secrets:/app/secrets
+    # Mapped directly to the host's /dev/shm space for sub-microsecond IPC with Ingester
+    ipc: host
+    depends_on:
+      - redis
+      - ingester
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
 
   redis:
     build:
@@ -45,3 +116,5 @@ services:
 volumes:
   redis_data:
   alpha_secrets:
+  alpha_pgdata:
+

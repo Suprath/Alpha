@@ -35,6 +35,7 @@ struct OptionGreeks {
 struct Tick {
     uint64_t timestamp_ns;      // Alpha Internal IST Precision
     uint64_t exchange_time_ns;  // Exchange-provided timestamp
+    uint32_t instrument_token;  // O(1) int routing ID (e.g. 256265) over IPC
     double last_price;
     uint32_t last_quantity;
     uint64_t total_volume;

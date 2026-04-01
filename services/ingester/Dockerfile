@@ -3,7 +3,7 @@ FROM debian:bookworm AS builder
 
 LABEL stage=builder
 
-# Install dependencies (C++ compiler, Cmake, Boost, GTest, Protobuf)
+# Install dependencies (C++ compiler, Cmake, Boost, GTest, Protobuf, Postgres Libs)
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     libprotobuf-dev \
     protobuf-compiler \
     nlohmann-json3-dev \
+    libpqxx-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -34,6 +35,7 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y \
     libboost-system1.81.0 \
     libprotobuf32 \
+    libpqxx-dev \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 

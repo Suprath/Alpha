@@ -12,19 +12,77 @@ namespace alpha::ingester {
 
 using json = nlohmann::json;
 
-UpstoxIngester::UpstoxIngester(net::io_context& ioc) 
-    : ioc_(ioc) {
+UpstoxIngester::UpstoxIngester(net::io_context& ioc, bool with_db) 
+    : ioc_(ioc), heartbeat_timer_(ioc) {
     // 30 requests per minute for historical data = 0.5 requests per second
     rest_limiter_ = std::make_unique<RateLimiter>(0.5, 1.0); 
     access_token_ = load_token();
+
+    // Map Shared Memory
+    std::cout << "[IPC] Initializing Shared Memory Mapping (alpha_upstox_shm_v2)..." << std::endl;
+    shm_manager_ = std::make_unique<alpha::ipc::ShmManager>("alpha_upstox_shm_v2", alpha::ipc::ShmRole::PRODUCER);
+    ring_buffer_ = shm_manager_->get_or_create_buffer<alpha::ipc::SPSCRingBuffer<Tick, 65536>>("tick_queue");
+    
+    // Start Heartbeat for Zombie Segment Monitoring
+    schedule_heartbeat();
+
+    // Load Database Keys
+    if (with_db) {
+        load_instruments_from_db();
+    }
+}
+
+void UpstoxIngester::load_instruments_from_db() {
+    std::cout << "[DB] Connecting to PostgreSQL to load Instrument Master..." << std::endl;
+    std::string db_host = alpha::config::Config::get().get_string("POSTGRES_HOST", "postgres-db");
+    std::string db_port = alpha::config::Config::get().get_string("POSTGRES_PORT", "5432");
+    std::string db_name = alpha::config::Config::get().get_string("POSTGRES_DB", "alpha_db");
+    std::string db_user = alpha::config::Config::get().get_string("POSTGRES_USER", "alpha_user");
+    std::string db_pass = alpha::config::Config::get().get_string("POSTGRES_PASSWORD", "alpha_password");
+    
+    std::string conn_str = "host=" + db_host + " port=" + db_port + 
+                           " dbname=" + db_name + " user=" + db_user + " password=" + db_pass;
+
+    int retries = 15;
+    while (retries > 0) {
+        try {
+            pqxx::connection c(conn_str);
+            if (c.is_open()) {
+                pqxx::nontransaction n(c);
+                pqxx::result r = n.exec("SELECT instrument_key, id FROM instrument_universe WHERE date = CURRENT_DATE");
+                for (auto const& row : r) {
+                    instrument_map_[row[0].c_str()] = row[1].as<uint32_t>();
+                }
+                std::cout << "[DB] Successfully loaded " << instrument_map_.size() << " instruments from the Master." << std::endl;
+                return;
+            }
+        } catch (const std::exception &e) {
+            std::cerr << "[DB] Database not ready. Retrying in 2s... (" << e.what() << ")" << std::endl;
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            retries--;
+        }
+    }
+    std::cerr << "CRITICAL: Could not fetch instrument Master from Postgres!" << std::endl;
+}
+
+void UpstoxIngester::schedule_heartbeat() {
+    heartbeat_timer_.expires_after(std::chrono::milliseconds(100));
+    heartbeat_timer_.async_wait([this](const boost::system::error_code& ec) {
+        if (!ec && ring_buffer_) {
+            ring_buffer_->heartbeat_ts_ns.store(alpha::time::Timestamp::now_ns(), std::memory_order_relaxed);
+            schedule_heartbeat();
+        }
+    });
+}
+
+void UpstoxIngester::inject_manual_instrument_for_testing(const std::string& key, uint32_t token) {
+    instrument_map_[key] = token;
 }
 
 bool UpstoxIngester::authenticate(const std::string& auth_code) {
     std::cout << "Exchanging auth code for access token..." << std::endl;
-    // Manual code-to-token logic (In production, this is a POST request to Upstox)
-    // For now, we'll use the token if it's already in .env or the CACHE
     if (access_token_.empty()) {
-        access_token_ = auth_code; // If code is provided, use it
+        access_token_ = auth_code;
     }
     save_token(access_token_);
     return true;
@@ -38,15 +96,11 @@ void UpstoxIngester::save_token(const std::string& token) {
     j["timestamp"] = alpha::time::Timestamp::now_ns();
     
     std::ofstream file(path);
-    if (!file.is_open()) {
-        std::cerr << "CRITICAL ERROR: Failed to write to token path " << path << std::endl;
-        return;
-    }
+    if (!file.is_open()) return;
     file << j.dump(4);
 }
 
 std::string UpstoxIngester::load_token() {
-    // Priority: 1. ENV variable 2. JSON cache
     std::string env_token = alpha::config::Config::get().get_string("UPSTOX_ACCESS_TOKEN", "");
     if (!env_token.empty()) return env_token;
 
@@ -54,21 +108,13 @@ std::string UpstoxIngester::load_token() {
     std::ifstream file(path);
     if (file.is_open()) {
         try {
-            json j;
-            file >> j;
+            json j; file >> j;
             if (j.contains("access_token") && j.contains("timestamp")) {
                 uint64_t saved_time = j["timestamp"];
                 uint64_t current_time = alpha::time::Timestamp::now_ns();
-                // Upstox tokens expire after 1 day (86400 seconds) = 86400000000000 ns
-                if ((current_time - saved_time) < 86400000000000ULL) {
-                    return j["access_token"];
-                } else {
-                    std::cout << "[IST " << alpha::time::Timestamp::now_ist_ns() << "] Cached token expired." << std::endl;
-                }
+                if ((current_time - saved_time) < 86400000000000ULL) return j["access_token"];
             }
-        } catch (...) {
-            // Ignore parse errors, just return empty and act as if no token exists
-        }
+        } catch (...) {}
     }
     return "";
 }
@@ -79,7 +125,6 @@ void UpstoxIngester::connect_feed() {
 }
 
 void UpstoxIngester::subscribe(const std::vector<std::string>& symbols) {
-    (void)symbols;
     std::cout << "DEBUG: Subscribing to " << symbols.size() << " symbols in Full Mode." << std::endl;
 }
 
@@ -91,19 +136,77 @@ std::vector<Candle> UpstoxIngester::fetch_historical(const std::string& symbol,
     (void)interval;
     (void)from;
     (void)to;
-    // ENFORCE RATE LIMIT
     rest_limiter_->acquire();
-    
-    std::cout << "DEBUG: [IST " << alpha::time::Timestamp::now_ist_ns() 
-              << "] Fetching " << interval << " for " << symbol << "..." << std::endl;
-    
-    // In this stage, we are just verifying the logic. 
-    // We'll perform the real HTTP request in the next step when we verify connection.
     std::vector<Candle> mock_candles;
     Candle c { alpha::time::Timestamp::now_ns(), 100.0, 105.0, 95.0, 102.0, 1000, 0 };
     mock_candles.push_back(c);
-    
     return mock_candles;
+}
+
+void UpstoxIngester::on_message(const std::string& data) {
+    if (!ring_buffer_) return;
+
+    com::upstox::marketdata::v3::MarketDataFeed::FeedResponse response;
+    if (!response.ParseFromString(data)) {
+        std::cerr << "[WARN] Failed to parse Upstox Protobuf payload." << std::endl;
+        return;
+    }
+
+    // High Performance Iterator loop
+    for (auto const& [key, instrument_data] : response.feeds()) {
+        auto it = instrument_map_.find(key);
+        if (it == instrument_map_.end()) {
+            // Unregistered token, skip processing! O(1) mitigation of garbage bandwidth.
+            continue;
+        }
+
+        Tick t;
+        t.instrument_token = it->second;
+
+        if (instrument_data.has_ltp_data()) {
+            auto const& ltp = instrument_data.ltp_data();
+            t.last_price = ltp.last_price();
+            t.timestamp_ns = ltp.last_tick_time() * 1000000ULL; // Upstox provides ms, convert to ns
+            ring_buffer_->push(t);
+
+        } else if (instrument_data.has_full_data()) {
+            auto const& full = instrument_data.full_data();
+            t.last_price = full.ltp().last_price();
+            t.timestamp_ns = full.ltp().last_tick_time() * 1000000ULL;
+            t.total_volume = full.volume_traded_today();
+            t.vwap = full.average_price();
+            // Upstox schema extension: close_price could optionally map if structurally required
+
+            if (full.has_market_depth()) {
+                auto const& depth = full.market_depth();
+                for (int i = 0; i < depth.bids_size() && i < 5; ++i) {
+                    t.bids[i] = {
+                        .price = depth.bids(i).price(),
+                        .quantity = static_cast<uint32_t>(depth.bids(i).quantity()),
+                        .orders = static_cast<uint32_t>(depth.bids(i).orders())
+                    };
+                }
+                for (int i = 0; i < depth.asks_size() && i < 5; ++i) {
+                    t.asks[i] = {
+                        .price = depth.asks(i).price(),
+                        .quantity = static_cast<uint32_t>(depth.asks(i).quantity()),
+                        .orders = static_cast<uint32_t>(depth.asks(i).orders())
+                    };
+                }
+            }
+
+            if (full.has_greeks()) {
+                auto const& greeks = full.greeks();
+                t.greeks.iv = greeks.iv();
+                t.greeks.delta = greeks.delta();
+                t.greeks.theta = greeks.theta();
+                t.greeks.gamma = greeks.gamma();
+                t.greeks.vega = greeks.vega();
+            }
+
+            ring_buffer_->push(t);
+        }
+    }
 }
 
 } // namespace alpha::ingester
