@@ -49,7 +49,7 @@ void UpstoxIngester::load_instruments_from_db() {
             pqxx::connection c(conn_str);
             if (c.is_open()) {
                 pqxx::nontransaction n(c);
-                pqxx::result r = n.exec("SELECT instrument_key, id FROM instrument_universe WHERE date = CURRENT_DATE");
+                pqxx::result r = n.exec("SELECT instrument_key, id FROM instrument_universe ORDER BY date DESC LIMIT 50000");
                 for (auto const& row : r) {
                     instrument_map_[row[0].c_str()] = row[1].as<uint32_t>();
                 }
