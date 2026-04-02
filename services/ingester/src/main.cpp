@@ -39,7 +39,15 @@ int main(int argc, char* argv[]) {
             // 4. Connect to Real-time Stream
             ingester->connect_feed();
             if (!symbols_env.empty()) {
-                ingester->subscribe({symbols_env});
+                std::vector<std::string> symbols;
+                std::stringstream ss(symbols_env);
+                std::string s;
+                while (std::getline(ss, s, ',')) {
+                    if (!s.empty()) symbols.push_back(s);
+                }
+                if (!symbols.empty()) {
+                    ingester->subscribe(symbols);
+                }
             }
             
             std::cout << "[IST " << alpha::time::Timestamp::now_ist_ns() << "] Monitoring " << vendor << " feed. Press Ctrl+C to terminate." << std::endl;

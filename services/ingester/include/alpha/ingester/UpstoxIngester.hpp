@@ -5,7 +5,9 @@
 #include <vector>
 #include <utility>
 #include <boost/asio.hpp>
+#include <boost/asio/ssl.hpp>
 #include <boost/beast.hpp>
+#include <boost/beast/ssl.hpp>
 #include <alpha/models/MarketModels.hpp>
 #include <alpha/rate_limit/RateLimiter.hpp>
 #include "market_data_v3.pb.h"
@@ -24,6 +26,7 @@ namespace beast = boost::beast;
 namespace http = beast::http;
 namespace websocket = beast::websocket;
 namespace net = boost::asio;
+namespace ssl = boost::asio::ssl;
 using tcp = boost::asio::ip::tcp;
 
 /**
@@ -67,9 +70,19 @@ private:
     void schedule_heartbeat();
     void load_instruments_from_db();
 
+    // Async WebSocket handlers
+    void on_resolve(beast::error_code ec, tcp::resolver::results_type results);
+    void on_connect(beast::error_code ec, tcp::resolver::endpoint_type ep);
+    void on_ssl_handshake(beast::error_code ec);
+    void on_handshake(beast::error_code ec);
+    void on_read(beast::error_code ec, std::size_t bytes_transferred);
+
     net::io_context& ioc_;
+    ssl::context ssl_ctx_;
+    tcp::resolver resolver_;
     std::string access_token_;
-    std::unique_ptr<websocket::stream<beast::tcp_stream>> ws_;
+    std::unique_ptr<websocket::stream<beast::ssl_stream<beast::tcp_stream>>> ws_;
+    beast::flat_buffer buffer_;
     std::unique_ptr<RateLimiter> rest_limiter_;
     
     // DB Context

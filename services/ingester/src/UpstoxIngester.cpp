@@ -13,10 +13,14 @@ namespace alpha::ingester {
 using json = nlohmann::json;
 
 UpstoxIngester::UpstoxIngester(net::io_context& ioc, bool with_db) 
-    : ioc_(ioc), heartbeat_timer_(ioc) {
+    : ioc_(ioc), ssl_ctx_(ssl::context::tlsv12_client), resolver_(ioc), heartbeat_timer_(ioc) {
     // 30 requests per minute for historical data = 0.5 requests per second
     rest_limiter_ = std::make_unique<RateLimiter>(0.5, 1.0); 
     access_token_ = load_token();
+
+    // Configure SSL context
+    ssl_ctx_.set_default_verify_paths();
+    ssl_ctx_.set_verify_mode(ssl::verify_none); // In production, use peer verification with proper CA certs
 
     // Map Shared Memory
     std::cout << "[IPC] Initializing Shared Memory Mapping (alpha_upstox_shm_v2)..." << std::endl;
@@ -150,12 +154,136 @@ std::string UpstoxIngester::load_token() {
 }
 
 void UpstoxIngester::connect_feed() {
-    if (access_token_.empty()) return;
-    std::cout << "DEBUG: [IST " << alpha::time::Timestamp::now_ist_ns() << "] WebSocket Feed connection initialized." << std::endl;
+    if (access_token_.empty()) {
+        std::cerr << "[Upstox] ERROR: Cannot connect to feed without access token." << std::endl;
+        return;
+    }
+
+    std::cout << "[Upstox] Resolving feed host: api.upstox.com..." << std::endl;
+    resolver_.async_resolve("api.upstox.com", "443",
+        beast::bind_front_handler(&UpstoxIngester::on_resolve, this));
+}
+
+void UpstoxIngester::on_resolve(beast::error_code ec, tcp::resolver::results_type results) {
+    if (ec) {
+        std::cerr << "[Upstox] Resolve error: " << ec.message() << std::endl;
+        return;
+    }
+
+    ws_ = std::make_unique<websocket::stream<beast::ssl_stream<beast::tcp_stream>>>(ioc_, ssl_ctx_);
+    
+    // Set suggested timeout settings for the websocket
+    beast::get_lowest_layer(*ws_).expires_after(std::chrono::seconds(30));
+
+    // Make the connection on the IP address we get from a lookup
+    beast::get_lowest_layer(*ws_).async_connect(results,
+        beast::bind_front_handler(&UpstoxIngester::on_connect, this));
+}
+
+void UpstoxIngester::on_connect(beast::error_code ec, tcp::resolver::endpoint_type ep) {
+    boost::ignore_unused(ep);
+    if (ec) {
+        std::cerr << "[Upstox] Connect error: " << ec.message() << std::endl;
+        return;
+    }
+
+    // Set a timeout on the operation
+    beast::get_lowest_layer(*ws_).expires_after(std::chrono::seconds(30));
+
+    // Set SNI Hostname (Mandatory for Cloudfront/modern TLS servers)
+    if (!SSL_set_tlsext_host_name(ws_->next_layer().native_handle(), "api.upstox.com")) {
+        ec = beast::error_code(static_cast<int>(::ERR_get_error()), net::error::get_ssl_category());
+        std::cerr << "[Upstox] SNI set host name error: " << ec.message() << std::endl;
+        return;
+    }
+
+    // Perform the SSL handshake
+    ws_->next_layer().async_handshake(ssl::stream_base::client,
+        beast::bind_front_handler(&UpstoxIngester::on_ssl_handshake, this));
+}
+
+void UpstoxIngester::on_ssl_handshake(beast::error_code ec) {
+    if (ec) {
+        std::cerr << "[Upstox] SSL handshake error: " << ec.message() << std::endl;
+        return;
+    }
+
+    // Turn off the timeout on the tcp_stream, because the websocket stream has its own timeout system.
+    beast::get_lowest_layer(*ws_).expires_never();
+
+    // Set suggested timeout settings for the websocket
+    ws_->set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
+
+    // Add Authorization header for WebSocket upgrade
+    ws_->set_option(websocket::stream_base::decorator(
+        [token = access_token_](websocket::request_type& req)
+        {
+            req.set(http::field::authorization, "Bearer " + token);
+            req.set(http::field::user_agent, std::string(BOOST_BEAST_VERSION_STRING) + " alpha-ingester");
+            req.set(http::field::origin, "https://api.upstox.com");
+        }));
+
+    // Perform the websocket handshake
+    std::string host = "api.upstox.com";
+    std::string target = "/v2/feed/market-data-feed";
+    ws_->async_handshake(host, target,
+        beast::bind_front_handler(&UpstoxIngester::on_handshake, this));
+}
+
+void UpstoxIngester::on_handshake(beast::error_code ec) {
+    if (ec) {
+        std::cerr << "[Upstox] WebSocket handshake error: " << ec.message() << std::endl;
+        return;
+    }
+
+    std::cout << "[Upstox] WebSocket Handshake Successful. Connection established." << std::endl;
+    
+    // Set binary mode for Protobuf ingestion
+    ws_->binary(true);
+
+    // Initial read
+    ws_->async_read(buffer_,
+        beast::bind_front_handler(&UpstoxIngester::on_read, this));
+}
+
+void UpstoxIngester::on_read(beast::error_code ec, std::size_t bytes_transferred) {
+    boost::ignore_unused(bytes_transferred);
+
+    if (ec) {
+        std::cerr << "[Upstox] Read error: " << ec.message() << std::endl;
+        return;
+    }
+
+    // Process the message (Protobuf Decoder)
+    std::string message = beast::buffers_to_string(buffer_.data());
+    on_message(message);
+
+    // Clear the buffer
+    buffer_.consume(buffer_.size());
+
+    // Queue another read
+    ws_->async_read(buffer_,
+        beast::bind_front_handler(&UpstoxIngester::on_read, this));
 }
 
 void UpstoxIngester::subscribe(const std::vector<std::string>& symbols) {
-    std::cout << "DEBUG: Subscribing to " << symbols.size() << " symbols in Full Mode." << std::endl;
+    if (symbols.empty() || !ws_) return;
+
+    json j;
+    j["guid"] = "alpha_hft_session_" + std::to_string(alpha::time::Timestamp::now_ns());
+    j["method"] = "sub";
+    j["data"] = {
+        {"mode", "full"},
+        {"instrument_keys", symbols}
+    };
+
+    std::string frame = j.dump();
+    std::cout << "[Upstox] Sending subscription frame for " << symbols.size() << " symbols." << std::endl;
+    
+    ws_->async_write(net::buffer(frame), [this](beast::error_code ec, std::size_t bytes) {
+        boost::ignore_unused(bytes);
+        if (ec) std::cerr << "[Upstox] Subscription write error: " << ec.message() << std::endl;
+    });
 }
 
 std::vector<Candle> UpstoxIngester::fetch_historical(const std::string& symbol, 

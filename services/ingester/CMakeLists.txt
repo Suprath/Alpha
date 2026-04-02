@@ -11,6 +11,7 @@ find_package(Protobuf REQUIRED)
 # In Debian, libpqxx doesn't always have a strict CMake config finder out of the box, we can use pkg-config
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(pqxx REQUIRED libpqxx)
+find_package(OpenSSL REQUIRED)
 # nlohmann_json is often a header-only library, we'll assume it's in the include paths
 
 # Generate Protobuf classes
@@ -51,6 +52,7 @@ target_link_libraries(alpha-ingester-test
     Threads::Threads
     ${Protobuf_LIBRARIES}
     ${pqxx_LIBRARIES}
+    OpenSSL::SSL
 )
 add_test(NAME IngesterUnitTests COMMAND alpha-ingester-test)
 
@@ -60,6 +62,7 @@ target_link_libraries(alpha-ingester
     Threads::Threads
     ${Protobuf_LIBRARIES}
     ${pqxx_LIBRARIES}
+    OpenSSL::SSL
 )
 
 # Optimization Flags for HFT Development

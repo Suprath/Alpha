@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     protobuf-compiler \
     nlohmann-json3-dev \
     libpqxx-dev \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -36,6 +37,8 @@ RUN apt-get update && apt-get install -y \
     libboost-system1.81.0 \
     libprotobuf32 \
     libpqxx-dev \
+    libssl3 \
+    ca-certificates \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 
