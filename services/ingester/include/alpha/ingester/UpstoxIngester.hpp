@@ -14,6 +14,7 @@
 
 #include <alpha/ipc/ShmManager.hpp>
 #include <alpha/ipc/RingBuffer.hpp>
+#include <alpha/ingester/DataIngester.hpp>
 
 namespace alpha::ingester {
 
@@ -29,24 +30,24 @@ using tcp = boost::asio::ip::tcp;
  * @brief Manages data ingestion from Upstox V3.
  * Handles OAuth, WebSocket streaming, and historical data retrieval.
  */
-class UpstoxIngester {
+class UpstoxIngester : public DataIngester {
 public:
     UpstoxIngester(net::io_context& ioc, bool with_db = true);
 
     /**
      * @brief Perform manual OAuth token exchange.
      */
-    bool authenticate(const std::string& auth_code);
+    bool authenticate(const std::string& auth_code = "") override;
 
     /**
      * @brief Connect to the Upstox V3 WebSocket feed.
      */
-    void connect_feed();
+    void connect_feed() override;
 
     /**
      * @brief Subscribe to full market data for a list of symbols.
      */
-    void subscribe(const std::vector<std::string>& symbols);
+    void subscribe(const std::vector<std::string>& symbols) override;
 
     /**
      * @brief Fetch historical candles for a specific timeframe.
@@ -54,11 +55,11 @@ public:
     std::vector<Candle> fetch_historical(const std::string& symbol, 
                                         const std::string& interval,
                                         const std::string& from, 
-                                        const std::string& to);
+                                        const std::string& to) override;
 
     // Testing Interface
     void inject_manual_instrument_for_testing(const std::string& key, uint32_t token);
-    void on_message(const std::string& data);
+    void on_message(const std::string& data) override;
 
 private:
     void save_token(const std::string& token);

@@ -1,6 +1,6 @@
 #include <iostream>
 #include <alpha/config/Config.hpp>
-#include <alpha/ingester/UpstoxIngester.hpp>
+#include <alpha/ingester/IngesterFactory.hpp>
 #include <alpha/time/Timestamp.hpp>
 #include <memory>
 #include <utility>
@@ -15,31 +15,15 @@ int main(int argc, char* argv[]) {
         // Keep the IO context alive even if it's idle for now
         auto work_guard = boost::asio::make_work_guard(ioc);
         
-        auto ingester = std::make_unique<alpha::ingester::UpstoxIngester>(ioc);
+        // 1. Resolve Vendor and Create Ingester
+        std::string vendor = alpha::config::Config::get().get_string("DATA_VENDOR", "UPSTOX");
+        auto ingester = alpha::ingester::IngesterFactory::create(ioc, vendor);
 
-        // 1. Check for token in ENV first (non-interactive/headless mode)
-        std::string auth_code = "";
-        std::string existing_token = alpha::config::Config::get().get_string("UPSTOX_ACCESS_TOKEN", "");
-        
-        if (existing_token.empty()) {
-            // Only prompt if we're in a TTY (not detached Docker)
-            std::string login_url = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=";
-            login_url += alpha::config::Config::get().get_string("UPSTOX_API_KEY");
-            login_url += "&redirect_uri=" + alpha::config::Config::get().get_string("UPSTOX_REDIRECT_URI");
-
-            std::cout << "1. Open this URL in your browser:\n" << login_url << std::endl;
-            std::cout << "2. Log in and paste the 'code=' from the redirect URL here: ";
+        // 2. Universal Authentication Flow (Interactive logic is now in subclasses)
+        if (ingester->authenticate()) {
+            std::cout << "[IST " << alpha::time::Timestamp::now_ist_ns() << "] " << vendor << " authentication successful!" << std::endl;
             
-            // Note: This will hang or fail in detached Docker if no token is in .env
-            if (!(std::cin >> auth_code)) {
-                std::cerr << "Failed to read auth_code from stdin. Ensure UPSTOX_ACCESS_TOKEN is set in .env for headless mode." << std::endl;
-            }
-        }
-
-        if (!existing_token.empty() || ingester->authenticate(auth_code)) {
-            std::cout << "[IST " << alpha::time::Timestamp::now_ist_ns() << "] Authentication successful!" << std::endl;
-            
-            // Dynamic Retrieval based on Environment
+            // 3. Optional Historical Data Backfill
             std::string symbols_env = alpha::config::Config::get().get_string("INGEST_SYMBOLS", "");
             if (!symbols_env.empty()) {
                 std::string interval = alpha::config::Config::get().get_string("INGEST_INTERVAL", "1minute");
@@ -52,12 +36,13 @@ int main(int argc, char* argv[]) {
                 }
             }
 
+            // 4. Connect to Real-time Stream
             ingester->connect_feed();
             if (!symbols_env.empty()) {
                 ingester->subscribe({symbols_env});
             }
             
-            std::cout << "[IST " << alpha::time::Timestamp::now_ist_ns() << "] Ingester is now monitoring the feed. Press Ctrl+C to terminate." << std::endl;
+            std::cout << "[IST " << alpha::time::Timestamp::now_ist_ns() << "] Monitoring " << vendor << " feed. Press Ctrl+C to terminate." << std::endl;
             ioc.run();
         }
 

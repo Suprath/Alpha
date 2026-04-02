@@ -27,6 +27,7 @@ include_directories(${pqxx_INCLUDE_DIRS})
 set(SOURCES
     src/main.cpp
     src/UpstoxIngester.cpp
+    src/IngesterFactory.cpp
     ${PROTO_SRCS}
 )
 
@@ -42,6 +43,7 @@ add_executable(alpha-ingester-test
     ../../tests/unit/rate_limiter_test.cpp
     ../../tests/unit/ipc_ringbuffer_test.cpp
     src/UpstoxIngester.cpp 
+    src/IngesterFactory.cpp
     ${PROTO_SRCS}
 )
 target_link_libraries(alpha-ingester-test

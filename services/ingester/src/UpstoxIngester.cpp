@@ -79,11 +79,41 @@ void UpstoxIngester::inject_manual_instrument_for_testing(const std::string& key
     instrument_map_[key] = token;
 }
 
-bool UpstoxIngester::authenticate(const std::string& auth_code) {
-    std::cout << "Exchanging auth code for access token..." << std::endl;
-    if (access_token_.empty()) {
-        access_token_ = auth_code;
+bool UpstoxIngester::authenticate(const std::string& code) {
+    std::string auth_code = code;
+    
+    // 1. Check if we already have a valid session
+    if (!access_token_.empty()) {
+        std::cout << "[Upstox] Using cached session token." << std::endl;
+        return true;
     }
+
+    // 2. If no code provided, and no token, we may need interactive login
+    if (auth_code.empty()) {
+        std::string api_key = alpha::config::Config::get().get_string("UPSTOX_API_KEY", "");
+        std::string redirect = alpha::config::Config::get().get_string("UPSTOX_REDIRECT_URI", "http://localhost:8080");
+        
+        if (api_key.empty()) {
+            std::cerr << "[Upstox] ERROR: UPSTOX_API_KEY is missing from configuration." << std::endl;
+            return false;
+        }
+
+        std::string login_url = "https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=" + api_key + "&redirect_uri=" + redirect;
+        
+        std::cout << "\n=== Upstox Interactive Login ===" << std::endl;
+        std::cout << "1. Open this URL: " << login_url << std::endl;
+        std::cout << "2. Enter the 'code=' parameter here: ";
+        
+        if (!(std::cin >> auth_code)) {
+            std::cerr << "[Upstox] Failed to read auth_code from stdin." << std::endl;
+            return false;
+        }
+    }
+
+    std::cout << "[Upstox] Exchanging auth code for access token..." << std::endl;
+    // In production, this would be a real POST request. 
+    // For now, we simulate the exchange.
+    access_token_ = auth_code; 
     save_token(access_token_);
     return true;
 }
