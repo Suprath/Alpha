@@ -19,8 +19,11 @@ TEST_MODE = os.getenv("TEST_MODE", "0") == "1"
 URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
 
 
+from typing import Optional, Any
+
+
 class InstrumentLoaderWorker(BaseWorker):
-    def run(self) -> None:
+    def run(self, params: Optional[dict[str, Any]] = None) -> None:
         print("[instrument_loader] Starting...")
         conn = self._connect_with_retry()
         if not conn:

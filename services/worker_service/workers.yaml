@@ -1,3 +1,43 @@
 instrument_loader:
   schedule: "0 6 * * *"   # 6:00 AM IST daily
   enabled: true
+
+equity_bhavcopy:
+  schedule: "30 19 * * *" # 7:30 PM IST daily
+  enabled: true
+
+fno_bhavcopy:
+  schedule: "45 19 * * *" # 7:45 PM IST daily
+  enabled: true
+
+index_bhavcopy:
+  schedule: "0 20 * * *"  # 8:00 PM IST daily
+  enabled: true
+
+stock_master:
+  schedule: "0 9 * * 0"   # 9:00 AM IST every Sunday
+  enabled: true
+
+deals_worker:
+  schedule: "0 19 * * *"  # 7:00 PM IST daily
+  enabled: true
+
+corporate_actions:
+  schedule: "15 19 * * *" # 7:15 PM IST daily
+  enabled: true
+
+fii_activity:
+  schedule: "15 20 * * *" # 8:15 PM IST daily
+  enabled: true
+
+index_constituents:
+  schedule: "0 10 * * 0"  # 10:00 AM IST every Sunday
+  enabled: true
+
+margin_data:
+  schedule: "0 21 * * *"  # 9:00 PM IST daily
+  enabled: true
+
+holiday_calendar:
+  schedule: "0 0 1 * *"   # 12:00 AM IST on 1st of every month
+  enabled: true

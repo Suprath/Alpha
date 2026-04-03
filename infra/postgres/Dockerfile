@@ -1,9 +1,10 @@
 FROM postgres:15-alpine
 
-# Set time zone (IST) 
-RUN apk add --no-cache tzdata
+# Set timezone to IST
 ENV TZ=Asia/Kolkata
 
-# You can add custom configuration or init scripts here in the future
-# e.g., COPY postgresql.conf /etc/postgresql/postgresql.conf
-# e.g., COPY init.sql /docker-entrypoint-initdb.d/
+# Add initialization scripts
+# Note: These only run if the /var/lib/postgresql/data volume is empty
+COPY init.sql /docker-entrypoint-initdb.d/
+
+EXPOSE 5432

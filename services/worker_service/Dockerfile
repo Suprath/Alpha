@@ -1,15 +1,14 @@
-FROM python:3.11-slim
+FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y libpq-dev gcc && rm -rf /var/lib/apt/lists/*
-
 COPY services/worker_service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir httpx
 
-# Copy full repo so absolute imports like `services.worker_service.core` resolve
 COPY . .
 
-WORKDIR /app/services/worker_service
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
 
-ENTRYPOINT ["python", "main.py"]
+ENTRYPOINT ["python3", "-m", "services.worker_service.main"]
