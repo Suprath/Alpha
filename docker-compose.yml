@@ -36,7 +36,10 @@ services:
           memory: 512M
 
   questdb:
-    image: questdb/questdb:latest
+    build:
+      context: ./infra/questdb
+      dockerfile: Dockerfile
+    image: alpha-questdb:latest
     container_name: alpha-questdb
     restart: unless-stopped
     ports:
@@ -49,7 +52,10 @@ services:
       - alpha_questdata:/var/lib/questdb
 
   postgres-db:
-    image: postgres:15-alpine
+    build:
+      context: ./infra/postgres
+      dockerfile: Dockerfile
+    image: alpha-postgres:latest
     container_name: alpha-postgres
     restart: unless-stopped
     environment:
