@@ -5,6 +5,24 @@
 
 namespace alpha::ingester {
 
+UpstoxOpsFeed::UpstoxOpsFeed(net::io_context& ioc, ssl::context& ssl_ctx,
+                             const std::string& qdb_host, int qdb_ilp_port,
+                             const std::unordered_map<uint32_t, std::string>& token_map)
+    : UpstoxFeed(ioc, ssl_ctx),
+      qdb_host_(qdb_host), qdb_ilp_port_(qdb_ilp_port),
+      token_to_symbol_map_(token_map) {
+    
+    worker_thread_ = std::thread(&UpstoxOpsFeed::worker_loop, this);
+}
+
+UpstoxOpsFeed::~UpstoxOpsFeed() {
+    stop_worker_ = true;
+    queue_cv_.notify_all();
+    if (worker_thread_.joinable()) {
+        worker_thread_.join();
+    }
+}
+
 void UpstoxOpsFeed::handle_message(const std::string& data) {
     Upstox::MarketDataFeed feed;
     if (!feed.ParseFromString(data)) return;
@@ -27,7 +45,7 @@ void UpstoxOpsFeed::handle_message(const std::string& data) {
                 persist_greeks(key, g, alpha::time::Timestamp::now_ns());
             }
 
-            // 2. Persist Tick with OI and L1
+            // 2. Persist Tick
             Tick t;
             t.last_price = market_ff.ltp();
             t.total_volume = market_ff.vtt();
@@ -45,7 +63,7 @@ void UpstoxOpsFeed::handle_message(const std::string& data) {
             t.timestamp_ns = alpha::time::Timestamp::now_ns();
             persist_tick_by_symbol(key, t);
 
-            // 3. Persist various timeframes if present in the full feed
+            // 3. Persist various timeframes
             for (auto const& ohlc : market_ff.ohlc()) {
                 Candle c;
                 c.open = ohlc.open();
@@ -62,22 +80,16 @@ void UpstoxOpsFeed::handle_message(const std::string& data) {
 }
 
 void UpstoxOpsFeed::persist_candle(const Candle& c, const std::string& symbol, const std::string& interval) {
-    ensure_qdb_connection();
-    if (!qdb_socket_) return;
-
     std::string line = "candles,symbol=" + symbol + 
                        ",interval=" + interval +
                        " open=" + std::to_string(c.open) +
                        ",high=" + std::to_string(c.high) +
                        ",low=" + std::to_string(c.low) +
                        ",close=" + std::to_string(c.close) +
-                       ",volume=" + std::to_string(c.volume) + "u" +
+                       ",volume=" + std::to_string(c.volume) + "i" + // Signed long in QuestDB
                        ",open_interest=" + std::to_string(c.open_interest) +
                        " " + std::to_string(c.timestamp_ns) + "\n";
-
-    try {
-        boost::asio::write(*qdb_socket_, boost::asio::buffer(line));
-    } catch (...) { qdb_socket_.reset(); }
+    push_to_queue(line);
 }
 
 void UpstoxOpsFeed::persist_tick(const Tick& t) {
@@ -88,27 +100,19 @@ void UpstoxOpsFeed::persist_tick(const Tick& t) {
 }
 
 void UpstoxOpsFeed::persist_tick_by_symbol(const std::string& symbol, const Tick& t) {
-    ensure_qdb_connection();
-    if (!qdb_socket_) return;
-
     std::string line = "ticks,symbol=" + symbol + 
                        " price=" + std::to_string(t.last_price) +
-                       ",volume=" + std::to_string(t.total_volume) + "u" +
+                       ",volume=" + std::to_string(t.total_volume) + "i" +
                        ",bid_price=" + std::to_string(t.bid_price) +
-                       ",bid_size=" + std::to_string(t.bid_size) + "u" +
+                       ",bid_size=" + std::to_string(t.bid_size) + "i" +
                        ",ask_price=" + std::to_string(t.ask_price) +
-                       ",ask_size=" + std::to_string(t.ask_size) + "u" +
+                       ",ask_size=" + std::to_string(t.ask_size) + "i" +
                        ",open_interest=" + std::to_string(t.open_interest) +
                        " " + std::to_string(t.timestamp_ns) + "\n";
-    try {
-        boost::asio::write(*qdb_socket_, boost::asio::buffer(line));
-    } catch (...) { qdb_socket_.reset(); }
+    push_to_queue(line);
 }
 
 void UpstoxOpsFeed::persist_greeks(const std::string& symbol, const OptionGreeks& g, uint64_t ts_ns) {
-    ensure_qdb_connection();
-    if (!qdb_socket_) return;
-
     std::string line = "option_greeks,symbol=" + symbol + 
                        " iv=" + std::to_string(g.iv) +
                        ",delta=" + std::to_string(g.delta) +
@@ -117,9 +121,61 @@ void UpstoxOpsFeed::persist_greeks(const std::string& symbol, const OptionGreeks
                        ",vega=" + std::to_string(g.vega) +
                        ",rho=" + std::to_string(g.rho) +
                        " " + std::to_string(ts_ns) + "\n";
-    try {
-        boost::asio::write(*qdb_socket_, boost::asio::buffer(line));
-    } catch (...) { qdb_socket_.reset(); }
+    push_to_queue(line);
+}
+
+void UpstoxOpsFeed::push_to_queue(const std::string& line) {
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        write_queue_.push_back(line);
+    }
+    queue_cv_.notify_one();
+}
+
+void UpstoxOpsFeed::worker_loop() {
+    std::string batch_buffer;
+    const size_t batch_limit = 100;
+
+    while (!stop_worker_) {
+        std::deque<std::string> local_queue;
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex_);
+            queue_cv_.wait(lock, [this] { return !write_queue_.empty() || stop_worker_; });
+            if (stop_worker_ && write_queue_.empty()) break;
+            local_queue.swap(write_queue_);
+        }
+
+        ensure_qdb_connection();
+        if (!qdb_socket_ || !qdb_socket_->is_open()) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            continue;
+        }
+
+        batch_buffer.clear();
+        size_t count = 0;
+        for (const auto& line : local_queue) {
+            batch_buffer += line;
+            count++;
+            if (count >= batch_limit) {
+                try {
+                    boost::asio::write(*qdb_socket_, boost::asio::buffer(batch_buffer));
+                    batch_buffer.clear();
+                    count = 0;
+                } catch (...) {
+                    qdb_socket_.reset();
+                    break;
+                }
+            }
+        }
+
+        if (!batch_buffer.empty() && qdb_socket_) {
+            try {
+                boost::asio::write(*qdb_socket_, boost::asio::buffer(batch_buffer));
+            } catch (...) {
+                qdb_socket_.reset();
+            }
+        }
+    }
 }
 
 void UpstoxOpsFeed::ensure_qdb_connection() {
@@ -130,10 +186,11 @@ void UpstoxOpsFeed::ensure_qdb_connection() {
         tcp::resolver resolver(ioc_);
         auto endpoints = resolver.resolve(qdb_host_, std::to_string(qdb_ilp_port_));
         boost::asio::connect(*qdb_socket_, endpoints);
-    } catch (const std::exception& e) {
-        std::cerr << "Failed to connect to QuestDB: " << e.what() << std::endl;
+    } catch (...) {
         qdb_socket_.reset();
     }
 }
+
+} // namespace alpha::ingester
 
 } // namespace alpha::ingester

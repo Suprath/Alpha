@@ -1,0 +1,44 @@
+services:
+  tester:
+    build:
+      context: .
+      dockerfile: infra/tester/Dockerfile
+    image: alpha-tester:latest
+    container_name: alpha-tester
+    environment:
+      - TZ=Asia/Kolkata
+      - POSTGRES_HOST=postgres-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=alpha_db
+      - POSTGRES_USER=alpha_user
+      - POSTGRES_PASSWORD=alpha_password
+      - QUESTDB_HOST=questdb
+      - QUESTDB_ILP_PORT=9009
+      - TEST_MODE=1
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      questdb:
+        condition: service_started
+      redis:
+        condition: service_started
+
+  postgres-db:
+    build:
+      context: ./infra/postgres
+      dockerfile: Dockerfile
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alpha_user -d alpha_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  questdb:
+    build:
+      context: ./infra/questdb
+      dockerfile: Dockerfile
+
+  redis:
+    build:
+      context: ./infra/redis
+      dockerfile: Dockerfile

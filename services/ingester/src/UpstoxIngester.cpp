@@ -55,7 +55,7 @@ UpstoxIngester::UpstoxIngester(net::io_context& ioc, bool with_db)
     live_feed_ = std::make_shared<UpstoxLiveFeed>(ioc_, ssl_ctx_, ring_buffer_, instrument_map_);
     ops_feed_ = std::make_shared<UpstoxOpsFeed>(ioc_, ssl_ctx_, qdb_host, qdb_port, token_to_symbol_map_);
 
-    backfill_limiter_ = std::make_unique<RateLimiter>(8.0, 1.0);
+    backfill_limiter_ = std::make_unique<RateLimiter>(8.0, 2.0);
 
     schedule_heartbeat();
     process_backfill_queue();

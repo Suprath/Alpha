@@ -1,10 +1,7 @@
 FROM questdb/questdb:latest
 
-# Set time zone (IST) 
-USER root
-RUN apt-get update && apt-get install -y tzdata && rm -rf /var/lib/apt/lists/*
+# Set time zone (IST) if possible, but skip installation if pkg manager missing
 ENV TZ=Asia/Kolkata
-USER questdb
 
 # Custom configuration can be added here in the future
 # e.g., COPY server.conf /var/lib/questdb/conf/server.conf
