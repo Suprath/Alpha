@@ -7,7 +7,7 @@ services:
     container_name: alpha-ingester
     restart: unless-stopped
     ports:
-      - "9000:9000"
+      - "9002:9000"
     environment:
       - TZ=Asia/Kolkata
       - POSTGRES_HOST=postgres-db
@@ -15,6 +15,8 @@ services:
       - POSTGRES_DB=alpha_db
       - POSTGRES_USER=alpha_user
       - POSTGRES_PASSWORD=alpha_password
+      - QUESTDB_HOST=questdb
+      - QUESTDB_ILP_PORT=9009
     env_file:
       - .env
     volumes:
@@ -25,11 +27,26 @@ services:
     ipc: host
     depends_on:
       - redis
+      - postgres-db
+      - questdb
     deploy:
       resources:
         limits:
           cpus: '1.0'
           memory: 512M
+
+  questdb:
+    image: questdb/questdb:latest
+    container_name: alpha-questdb
+    restart: unless-stopped
+    ports:
+      - "9000:9000"  # Web Console
+      - "9009:9009"  # ILP (TCP)
+      - "8812:8812"  # Postgres Wire Protocol
+    environment:
+      - QDB_TELEMETRY_ENABLED=false
+    volumes:
+      - alpha_questdata:/var/lib/questdb
 
   postgres-db:
     image: postgres:15-alpine
@@ -56,20 +73,23 @@ services:
     depends_on:
       - postgres-db
 
-  instrument-worker:
+  worker-service:
     build:
-      context: ./services/instrument_worker
-      dockerfile: Dockerfile
-    image: alpha-instrument-worker:latest
-    container_name: alpha-instrument-worker
-    restart: "no" # It's a job, it crashes or succeeds and stops until tomorrow
+      context: .
+      dockerfile: services/worker_service/Dockerfile
+    image: alpha-worker-service:latest
+    container_name: alpha-worker-service
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
     environment:
+      - TZ=Asia/Kolkata
       - POSTGRES_HOST=postgres-db
       - POSTGRES_PORT=5432
       - POSTGRES_DB=alpha_db
       - POSTGRES_USER=alpha_user
       - POSTGRES_PASSWORD=alpha_password
-      - TEST_MODE=1  # Pull only 3 mock instruments
+      - TEST_MODE=1
     depends_on:
       - postgres-db
 
@@ -117,4 +137,5 @@ volumes:
   redis_data:
   alpha_secrets:
   alpha_pgdata:
+  alpha_questdata:
 

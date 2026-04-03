@@ -1,0 +1,3 @@
+instrument_loader:
+  schedule: "0 6 * * *"   # 6:00 AM IST daily
+  enabled: true
