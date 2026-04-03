@@ -25,7 +25,7 @@ class HolidayCalendarWorker(BaseWorker):
         try:
             downloader = BhavcopyDownloader()
             url = f"{downloader.BASE_URL}/api/holiday-master?type=trading"
-            response = downloader.session.get(url, timeout=15)
+            response = downloader.client.get(url, timeout=15)
             
             if response.status_code == 200:
                 self._process_json(conn, response.json())
@@ -46,30 +46,44 @@ class HolidayCalendarWorker(BaseWorker):
                 retries -= 1
         return None
 
+    def _ensure_schema(self, conn):
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS holiday_calendar (
+                    holiday_date DATE NOT NULL,
+                    description TEXT,
+                    exchange VARCHAR(16),
+                    PRIMARY KEY (holiday_date, exchange)
+                );
+            """)
+        conn.commit()
+
     def _process_json(self, conn, data):
-        # The JSON format typically has a list of holidays
+        # The JSON format is a dict where keys are segments (CM, FO, etc.)
+        # and values are lists of holiday objects.
         records = []
-        for segment in data:
-            segment_name = segment.get("tradingSegment", "CM")
-            for holiday in segment.get("holidays", []):
+        for segment_name, holidays in data.items():
+            for holiday in holidays:
                 try:
+                    # Date format: DD-Mon-YYYY (e.g., 26-Jan-2026)
                     h_date = datetime.strptime(holiday.get("tradingDate"), "%d-%b-%Y").date()
                     records.append((
                         h_date,
                         holiday.get("description", "Trading Holiday"),
                         segment_name
                     ))
-                except:
+                except Exception as e:
                     continue
 
         if records:
+            # Re-ensure schema in case it was created with the old PK
+            self._ensure_schema(conn)
             with conn.cursor() as cur:
                 execute_values(cur, """
                     INSERT INTO holiday_calendar (holiday_date, description, exchange)
                     VALUES %s
-                    ON CONFLICT (holiday_date) DO UPDATE SET
-                        description = EXCLUDED.description,
-                        exchange = EXCLUDED.exchange;
+                    ON CONFLICT (holiday_date, exchange) DO UPDATE SET
+                        description = EXCLUDED.description;
                 """, records)
             conn.commit()
             print(f"[holiday_calendar] Processed {len(records)} holidays.")

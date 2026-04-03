@@ -18,6 +18,7 @@ class BhavcopyDownloader:
     
     BASE_URL = "https://www.nseindia.com"
     API_URL = f"{BASE_URL}/api"
+    ARCHIVES_URL = "https://nsearchives.nseindia.com/content"
     
     def __init__(self):
         self.client = httpx.Client(
@@ -46,6 +47,7 @@ class BhavcopyDownloader:
             
             try:
                 # Step 1: Visit home page to trigger Akamai challenge
+                page.set_default_timeout(60000)
                 page.goto(self.BASE_URL, wait_until="networkidle")
                 
                 # Step 2: Visit a market data page to ensure all session cookies are set
@@ -87,13 +89,13 @@ class BhavcopyDownloader:
     def download_udiff_cm(self, date_str: str) -> Optional[str]:
         date_formatted = date_str.replace("-", "")
         file_name = f"BhavCopy_NSE_CM_0_0_0_{date_formatted}_F_0000.csv.zip"
-        url = f"{self.BASE_URL}/all-reports-equity-bhavcopy-udiff-zip?filename={file_name}&type=archives"
+        url = f"{self.ARCHIVES_URL}/cm/{file_name}"
         return self._download_and_extract(url, file_name.replace(".zip", ""))
 
     def download_udiff_fo(self, date_str: str) -> Optional[str]:
         date_formatted = date_str.replace("-", "")
         file_name = f"BhavCopy_NSE_FO_0_0_0_{date_formatted}_F_0000.csv.zip"
-        url = f"{self.BASE_URL}/all-reports-derivatives-bhavcopy-udiff-zip?filename={file_name}&type=archives"
+        url = f"{self.ARCHIVES_URL}/fo/{file_name}"
         return self._download_and_extract(url, file_name.replace(".zip", ""))
 
     def download_indices(self, date_str: str) -> Optional[str]:

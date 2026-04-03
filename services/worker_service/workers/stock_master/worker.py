@@ -29,7 +29,7 @@ class StockMasterWorker(BaseWorker):
             # Fetch Securities available for trading (Commonly used as master)
             # URL: https://www.nseindia.com/market-data/securities-available-for-trading
             url = f"{downloader.BASE_URL}/api/market-data-filter-equity-sme?csv=true"
-            response = downloader.session.get(url, timeout=15)
+            response = downloader.client.get(url, timeout=15)
             
             if response.status_code == 200:
                 self._process_csv(conn, response.text)
