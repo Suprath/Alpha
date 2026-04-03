@@ -1,61 +1,120 @@
 syntax = "proto3";
+package com.upstox.marketdatafeederv3udapi.rpc.proto;
 
-package com.upstox.marketdata.v3;
-
-message MarketDataFeed {
-    enum Type {
-        LTP = 0;
-        FULL = 1;
-        FULL_D30 = 2;
-    }
-
-    message FeedResponse {
-        Type type = 1;
-        map<string, InstrumentData> feeds = 2;
-    }
+message LTPC {
+  double ltp = 1;
+  int64 ltt = 2;
+  int64 ltq = 3;
+  double cp = 4;
 }
 
-message InstrumentData {
-    oneof data {
-        LTP ltp_data = 1;
-        Full full_data = 2;
-    }
+message MarketLevel {
+  repeated Quote bidAskQuote = 1;
 }
 
-message LTP {
-    double last_price = 1;
-    uint64 last_tick_time = 2;
+message MarketOHLC {
+  repeated OHLC ohlc = 1;
 }
 
-message Full {
-    LTP ltp = 1;
-    uint64 volume_traded_today = 2;
-    double average_price = 3;
-    MarketDepth market_depth = 4;
-    OptionGreeks greeks = 5;
-    double close_price = 6;
-}
-
-message MarketDepth {
-    message Level {
-        int32 quantity = 1;
-        double price = 2;
-        int32 orders = 3;
-    }
-    repeated Level bids = 1;
-    repeated Level asks = 2;
+message Quote {
+  int64 bidQ = 1;
+  double bidP = 2;
+  int64 askQ = 3;
+  double askP = 4;
 }
 
 message OptionGreeks {
-    double iv = 1;
-    double delta = 2;
-    double theta = 3;
-    double gamma = 4;
-    double vega = 5;
-    double theta_day = 6;
-    double vanna = 7;
-    double charm = 8;
-    double speed = 9;
-    double zomma = 10;
-    double color = 11;
+  double delta = 1;
+  double theta = 2;
+  double gamma = 3;
+  double vega = 4;
+  double rho = 5;
+}
+
+message OHLC {
+  string interval = 1;
+  double open = 2;
+  double high = 3;
+  double low = 4;
+  double close = 5;
+  int64 vol = 6;
+  int64 ts = 7;
+}
+
+enum Type{
+  initial_feed = 0;
+  live_feed = 1;
+  market_info = 2;
+}
+
+message MarketFullFeed{
+  LTPC ltpc = 1;
+  MarketLevel marketLevel = 2;
+  OptionGreeks optionGreeks = 3;
+  MarketOHLC marketOHLC = 4;
+  double atp = 5; //avg traded price
+  int64 vtt = 6; //volume traded today
+  double oi = 7; //open interest
+  double iv = 8; //implied volatility 
+  double tbq =9; //total buy quantity
+  double tsq = 10; //total sell quantity
+}
+
+message IndexFullFeed{
+  LTPC ltpc = 1;
+  MarketOHLC marketOHLC = 2;
+}
+
+
+message FullFeed {
+  oneof FullFeedUnion {
+    MarketFullFeed marketFF = 1;
+    IndexFullFeed indexFF = 2;
+  }
+}
+
+message FirstLevelWithGreeks{
+  LTPC ltpc = 1;
+  Quote firstDepth = 2;
+  OptionGreeks optionGreeks = 3;
+  int64 vtt = 4; //volume traded today
+  double oi = 5; //open interest
+  double iv = 6; //implied volatility 
+}
+
+message Feed {
+  oneof FeedUnion {
+    LTPC ltpc = 1;
+    FullFeed fullFeed = 2;
+    FirstLevelWithGreeks firstLevelWithGreeks = 3;
+  }
+  RequestMode requestMode = 4;
+}
+
+enum RequestMode {
+  ltpc = 0;
+  full_d5 = 1;
+  option_greeks = 2;
+  full_d30 = 3;
+}
+
+enum MarketStatus {
+  PRE_OPEN_START = 0;
+  PRE_OPEN_END = 1;
+  NORMAL_OPEN = 2;
+  NORMAL_CLOSE = 3;
+  CLOSING_START = 4;
+  CLOSING_END = 5;
+}
+
+
+message MarketInfo {
+  map<string, MarketStatus> segmentStatus = 1;
+}
+
+message FeedResponse{
+  Type type = 1;
+  map<string, Feed> feeds = 2;
+  int64 currentTs = 3;
+  MarketInfo marketInfo = 4;
 }

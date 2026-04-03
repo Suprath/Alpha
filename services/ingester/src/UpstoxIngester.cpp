@@ -431,71 +431,89 @@ std::vector<Candle> UpstoxIngester::fetch_historical(const std::string& symbol,
 }
 
 void UpstoxIngester::on_message(const std::string& data) {
-    if (!ring_buffer_ || data.empty()) return;
+    if (!ring_buffer_) return;
+    if (data.empty()) return;
 
-    com::upstox::marketdata::v3::MarketDataFeed::FeedResponse response;
+    com::upstox::marketdatafeederv3udapi::rpc::proto::FeedResponse response;
     bool parsed = false;
 
     if (response.ParseFromString(data)) {
         parsed = true;
     } else if (data.size() > 1 && response.ParseFromArray(data.data() + 1, data.size() - 1)) {
-        parsed = true;
+        parsed = true; // Handle potential 1-byte binary header
     }
 
     if (!parsed) {
         std::cerr << "[Upstox] CRITICAL: Protobuf parse failure. Size: " << data.size() << std::endl;
         return;
     }
+    
+    if (response.type() == com::upstox::marketdatafeederv3udapi::rpc::proto::market_info) {
+        std::cout << "[DEBUG] Received market_info. Feed map size: " << response.feeds().size() << std::endl;
+        return; // Initial status payload, nothing to push to signal engine
+    }
 
-    for (auto const& [key, instrument_data] : response.feeds()) {
+    for (auto const& [key, feed] : response.feeds()) {
         auto it = instrument_map_.find(key);
         if (it == instrument_map_.end()) continue;
 
-        Tick t;
+        Tick t {}; // Zero-initialize POD
         t.instrument_token = it->second;
         t.last_price = 0.0;
 
-        if (instrument_data.has_ltp_data()) {
-            t.last_price = instrument_data.ltp_data().last_price();
-            t.timestamp_ns = instrument_data.ltp_data().last_tick_time() * 1000000ULL;
-        } else if (instrument_data.has_full_data()) {
-            auto const& full = instrument_data.full_data();
-            if (full.has_ltp()) {
-                t.last_price = full.ltp().last_price();
-                t.timestamp_ns = full.ltp().last_tick_time() * 1000000ULL;
-            }
-            t.total_volume = full.volume_traded_today();
-            t.vwap = full.average_price();
-            
-            // Populate Market Depth
-            if (full.has_market_depth()) {
-                auto const& depth = full.market_depth();
-                for (int i = 0; i < depth.bids_size() && i < 5; ++i) {
-                        .price = depth.bids(i).price(),
-                        .quantity = static_cast<uint32_t>(depth.bids(i).quantity()),
-                        .orders = static_cast<uint32_t>(depth.bids(i).orders())
-                    };
+        if (feed.has_ltpc()) {
+            t.last_price = feed.ltpc().ltp();
+            t.timestamp_ns = feed.ltpc().ltt() * 1000000ULL;
+        } else if (feed.has_fullfeed()) {
+            auto const& fullfeed = feed.fullfeed();
+            if (fullfeed.has_marketff()) {
+                auto const& marketff = fullfeed.marketff();
+                if (marketff.has_ltpc()) {
+                    t.last_price = marketff.ltpc().ltp();
+                    t.timestamp_ns = marketff.ltpc().ltt() * 1000000ULL;
                 }
-                for (int i = 0; i < depth.asks_size() && i < 5; ++i) {
-                    t.asks[i] = {
-                        .price = depth.asks(i).price(),
-                        .quantity = static_cast<uint32_t>(depth.asks(i).quantity()),
-                        .orders = static_cast<uint32_t>(depth.asks(i).orders())
-                    };
+                t.total_volume = marketff.vtt();
+                t.vwap = marketff.atp();
+                
+                if (marketff.has_marketlevel()) {
+                     auto const& mlevel = marketff.marketlevel();
+                     for (int i = 0; i < mlevel.bidaskquote_size() && i < 5; ++i) {
+                         t.bids[i] = {
+                             .price = mlevel.bidaskquote(i).bidp(),
+                             .quantity = static_cast<uint32_t>(mlevel.bidaskquote(i).bidq()),
+                             .orders = 0
+                         };
+                         t.asks[i] = {
+                             .price = mlevel.bidaskquote(i).askp(),
+                             .quantity = static_cast<uint32_t>(mlevel.bidaskquote(i).askq()),
+                             .orders = 0
+                         };
+                     }
+                }
+                if (marketff.has_optiongreeks()) {
+                    t.greeks.iv = marketff.iv();
+                    t.greeks.delta = marketff.optiongreeks().delta();
+                    t.greeks.theta = marketff.optiongreeks().theta();
+                    t.greeks.gamma = marketff.optiongreeks().gamma();
+                    t.greeks.vega = marketff.optiongreeks().vega();
+                }
+            } else if (fullfeed.has_indexff()) {
+                auto const& indexff = fullfeed.indexff();
+                if (indexff.has_ltpc()) {
+                    t.last_price = indexff.ltpc().ltp();
+                    t.timestamp_ns = indexff.ltpc().ltt() * 1000000ULL;
                 }
             }
-
-            if (full.has_greeks()) {
-                auto const& greeks = full.greeks();
-                t.greeks.iv = greeks.iv();
-                t.greeks.delta = greeks.delta();
-                t.greeks.theta = greeks.theta();
-                t.greeks.gamma = greeks.gamma();
-                t.greeks.vega = greeks.vega();
+        } else if (feed.has_firstlevelwithgreeks()) {
+            auto const& firstlevel = feed.firstlevelwithgreeks();
+            if (firstlevel.has_ltpc()) {
+                t.last_price = firstlevel.ltpc().ltp();
+                t.timestamp_ns = firstlevel.ltpc().ltt() * 1000000ULL;
             }
-
-            ring_buffer_->push(t);
         }
+
+        // Push all ticks to the shared memory queue
+        ring_buffer_->push(t);
     }
 }
 
