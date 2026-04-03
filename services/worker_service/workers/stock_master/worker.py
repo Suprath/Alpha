@@ -24,6 +24,7 @@ class StockMasterWorker(BaseWorker):
             return
             
         try:
+            self._ensure_schema(conn)
             downloader = BhavcopyDownloader()
             # Fetch Securities available for trading (Commonly used as master)
             # URL: https://www.nseindia.com/market-data/securities-available-for-trading
@@ -37,6 +38,47 @@ class StockMasterWorker(BaseWorker):
         finally:
             conn.close()
         print("[stock_master] Finished successfully.")
+
+    def _ensure_schema(self, conn):
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS stock_master (
+                    symbol VARCHAR(64) PRIMARY KEY,
+                    isin VARCHAR(32),
+                    name VARCHAR(255),
+                    long_name VARCHAR(255),
+                    series VARCHAR(16),
+                    face_value DOUBLE PRECISION,
+                    sector VARCHAR(128),
+                    industry VARCHAR(128),
+                    market_cap BIGINT,
+                    pe_ratio DOUBLE PRECISION,
+                    beta DOUBLE PRECISION,
+                    dividend_yield DOUBLE PRECISION,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
+            # Evolve table if columns are missing
+            new_columns = [
+                ("long_name", "VARCHAR(255)"),
+                ("sector", "VARCHAR(128)"),
+                ("industry", "VARCHAR(128)"),
+                ("market_cap", "BIGINT"),
+                ("pe_ratio", "DOUBLE PRECISION"),
+                ("beta", "DOUBLE PRECISION"),
+                ("dividend_yield", "DOUBLE PRECISION"),
+                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            ]
+            for col_name, col_type in new_columns:
+                try:
+                    cur.execute(f"ALTER TABLE stock_master ADD COLUMN IF NOT EXISTS {col_name} {col_type};")
+                except Exception as e:
+                    print(f"[stock_master] Warning: Could not add column {col_name}: {e}")
+                    conn.rollback() # Rollback only this failed stmt
+                    continue
+        conn.commit()
 
     def _connect_with_retry(self):
         retries = 5
