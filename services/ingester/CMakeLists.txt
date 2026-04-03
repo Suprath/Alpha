@@ -8,11 +8,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(Threads REQUIRED)
 find_package(Protobuf REQUIRED)
-# In Debian, libpqxx doesn't always have a strict CMake config finder out of the box, we can use pkg-config
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(pqxx REQUIRED libpqxx)
 find_package(OpenSSL REQUIRED)
-# nlohmann_json is often a header-only library, we'll assume it's in the include paths
 
 # Generate Protobuf classes
 set(PROTO_FILE ../../shared/proto/market_data_v3.proto)
@@ -28,6 +26,9 @@ include_directories(${pqxx_INCLUDE_DIRS})
 set(SOURCES
     src/main.cpp
     src/UpstoxIngester.cpp
+    src/UpstoxFeed.cpp
+    src/UpstoxLiveFeed.cpp
+    src/UpstoxOpsFeed.cpp
     src/IngesterFactory.cpp
     ${PROTO_SRCS}
 )
@@ -35,7 +36,7 @@ set(SOURCES
 # Executable
 add_executable(alpha-ingester ${SOURCES})
 
-# Testing (as per project rules)
+# Testing
 enable_testing()
 find_package(GTest REQUIRED)
 add_executable(alpha-ingester-test 
@@ -43,7 +44,11 @@ add_executable(alpha-ingester-test
     ../../tests/unit/options_decode_test.cpp
     ../../tests/unit/rate_limiter_test.cpp
     ../../tests/unit/ipc_ringbuffer_test.cpp
+    ../../tests/unit/upstox_historical_test.cpp
     src/UpstoxIngester.cpp 
+    src/UpstoxFeed.cpp
+    src/UpstoxLiveFeed.cpp
+    src/UpstoxOpsFeed.cpp
     src/IngesterFactory.cpp
     ${PROTO_SRCS}
 )

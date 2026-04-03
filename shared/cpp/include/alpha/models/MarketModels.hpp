@@ -25,6 +25,7 @@ struct OptionGreeks {
     double gamma;
     double theta;
     double vega;
+    double rho;
     double iv;
 };
 
@@ -40,6 +41,13 @@ struct Tick {
     uint32_t last_quantity;
     uint64_t total_volume;
     double vwap;
+    double open_interest;
+
+    // L1 Bid/Ask
+    double bid_price;
+    uint32_t bid_size;
+    double ask_price;
+    uint32_t ask_size;
     
     // Market Depth (L2) - 5 levels as per Upstox V3
     MarketDepthLevel bids[5];
