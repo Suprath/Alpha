@@ -71,6 +71,7 @@ private:
     void load_instruments_from_db();
 
     // Async WebSocket handlers
+    void on_authorize(beast::error_code ec, http::response<http::string_body> res);
     void on_resolve(beast::error_code ec, tcp::resolver::results_type results);
     void on_connect(beast::error_code ec, tcp::resolver::endpoint_type ep);
     void on_ssl_handshake(beast::error_code ec);
@@ -81,6 +82,8 @@ private:
     ssl::context ssl_ctx_;
     tcp::resolver resolver_;
     std::string access_token_;
+    std::string authorized_url_;
+    std::vector<std::string> pending_subscriptions_;
     std::unique_ptr<websocket::stream<beast::ssl_stream<beast::tcp_stream>>> ws_;
     beast::flat_buffer buffer_;
     std::unique_ptr<RateLimiter> rest_limiter_;

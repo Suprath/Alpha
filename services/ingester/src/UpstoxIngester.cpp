@@ -159,9 +159,110 @@ void UpstoxIngester::connect_feed() {
         return;
     }
 
-    std::cout << "[Upstox] Resolving feed host: api.upstox.com..." << std::endl;
+    // Market Hours Check
+    if (!alpha::time::Timestamp::is_market_session_active()) {
+        std::cout << "[Upstox] WARNING: Attempting connection outside market hours (09:15-15:30 IST)." << std::endl;
+        // Proceeding anyway but with a warning, as requested for error handling
+    }
+
+    std::cout << "[Upstox] Authorizing V3 Market Data Feed..." << std::endl;
+    
+    // We'll reuse the resolver for the HTTP authorization step
     resolver_.async_resolve("api.upstox.com", "443",
-        beast::bind_front_handler(&UpstoxIngester::on_resolve, this));
+        [this](beast::error_code ec, tcp::resolver::results_type results) {
+            if (ec) {
+                std::cerr << "[Upstox] Auth Resolve error: " << ec.message() << std::endl;
+                return;
+            }
+
+            // Create a temporary SSL stream for the authorization request
+            auto stream = std::make_shared<beast::ssl_stream<beast::tcp_stream>>(ioc_, ssl_ctx_);
+            
+            // Set SNI
+            if (!SSL_set_tlsext_host_name(stream->native_handle(), "api.upstox.com")) {
+                std::cerr << "[Upstox] Auth SNI error" << std::endl;
+                return;
+            }
+
+            beast::get_lowest_layer(*stream).async_connect(results,
+                [this, stream](beast::error_code ec, tcp::resolver::endpoint_type) {
+                    if (ec) {
+                        std::cerr << "[Upstox] Auth Connect error: " << ec.message() << std::endl;
+                        return;
+                    }
+
+                    stream->async_handshake(ssl::stream_base::client,
+                        [this, stream](beast::error_code ec) {
+                            if (ec) {
+                                std::cerr << "[Upstox] Auth SSL handshake error: " << ec.message() << std::endl;
+                                return;
+                            }
+
+                            // Formulate the HTTP GET request
+                            auto req = std::make_shared<http::request<http::empty_body>>(http::verb::get, "/v3/feed/market-data-feed/authorize", 11);
+                            req->set(http::field::host, "api.upstox.com");
+                            req->set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
+                            req->set(http::field::authorization, "Bearer " + access_token_);
+                            req->set(http::field::accept, "application/json");
+
+                            http::async_write(*stream, *req,
+                                [this, stream, req](beast::error_code ec, std::size_t) {
+                                    if (ec) {
+                                        std::cerr << "[Upstox] Auth Write error: " << ec.message() << std::endl;
+                                        return;
+                                    }
+
+                                    auto res = std::make_shared<http::response<http::string_body>>();
+                                    // Use a temporary buffer for the response
+                                    auto buffer = std::make_shared<beast::flat_buffer>();
+                                    http::async_read(*stream, *buffer, *res,
+                                        [this, stream, res, buffer](beast::error_code ec, std::size_t) {
+                                            if (ec) {
+                                                std::cerr << "[Upstox] Auth Read error: " << ec.message() << std::endl;
+                                                return;
+                                            }
+                                            this->on_authorize(ec, *res);
+                                        });
+                                });
+                        });
+                });
+        });
+}
+
+void UpstoxIngester::on_authorize(beast::error_code ec, http::response<http::string_body> res) {
+    if (ec) return;
+
+    if (res.result() != http::status::ok) {
+        std::cerr << "[Upstox] Authorization Failed: " << res.result_int() << " " << res.body() << std::endl;
+        
+        if (alpha::time::Timestamp::is_market_session_active()) {
+            std::cerr << "[Upstox] CRITICAL: Authorization failed during market hours! Check token validity." << std::endl;
+        }
+        return;
+    }
+
+    try {
+        auto data = json::parse(res.body());
+        if (data["status"] == "success") {
+            authorized_url_ = data["data"]["authorized_redirect_uri"];
+            std::cout << "[Upstox] Authorization Successful. Redirecting to WSS..." << std::endl;
+
+            // Parse the WSS URL to get host and path
+            // Format: wss://wsfeeder-api.upstox.com/market-data-feeder/v3/upstox-developer-api/feeds?requestId=...&code=...
+            std::string url = authorized_url_;
+            std::string protocol = "wss://";
+            size_t host_start = url.find(protocol) + protocol.length();
+            size_t path_start = url.find("/", host_start);
+            std::string host = url.substr(host_start, path_start - host_start);
+
+            resolver_.async_resolve(host, "443",
+                beast::bind_front_handler(&UpstoxIngester::on_resolve, this));
+        } else {
+            std::cerr << "[Upstox] Auth error in response body: " << res.body() << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[Upstox] JSON Parse error during auth: " << e.what() << std::endl;
+    }
 }
 
 void UpstoxIngester::on_resolve(beast::error_code ec, tcp::resolver::results_type results) {
@@ -191,7 +292,14 @@ void UpstoxIngester::on_connect(beast::error_code ec, tcp::resolver::endpoint_ty
     beast::get_lowest_layer(*ws_).expires_after(std::chrono::seconds(30));
 
     // Set SNI Hostname (Mandatory for Cloudfront/modern TLS servers)
-    if (!SSL_set_tlsext_host_name(ws_->next_layer().native_handle(), "api.upstox.com")) {
+    // Extract host from authorized_url_
+    std::string url = authorized_url_;
+    std::string protocol = "wss://";
+    size_t host_start = url.find(protocol) + protocol.length();
+    size_t path_start = url.find("/", host_start);
+    std::string host = url.substr(host_start, path_start - host_start);
+
+    if (!SSL_set_tlsext_host_name(ws_->next_layer().native_handle(), host.c_str())) {
         ec = beast::error_code(static_cast<int>(::ERR_get_error()), net::error::get_ssl_category());
         std::cerr << "[Upstox] SNI set host name error: " << ec.message() << std::endl;
         return;
@@ -224,8 +332,14 @@ void UpstoxIngester::on_ssl_handshake(beast::error_code ec) {
         }));
 
     // Perform the websocket handshake
-    std::string host = "api.upstox.com";
-    std::string target = "/v2/feed/market-data-feed";
+    // Extract host and target path from authorized_url_
+    std::string url = authorized_url_;
+    std::string protocol = "wss://";
+    size_t host_start = url.find(protocol) + protocol.length();
+    size_t path_start = url.find("/", host_start);
+    std::string host = url.substr(host_start, path_start - host_start);
+    std::string target = url.substr(path_start);
+
     ws_->async_handshake(host, target,
         beast::bind_front_handler(&UpstoxIngester::on_handshake, this));
 }
@@ -244,6 +358,13 @@ void UpstoxIngester::on_handshake(beast::error_code ec) {
     // Initial read
     ws_->async_read(buffer_,
         beast::bind_front_handler(&UpstoxIngester::on_read, this));
+
+    // Handle pending subscriptions
+    if (!pending_subscriptions_.empty()) {
+        std::cout << "[Upstox] Applying " << pending_subscriptions_.size() << " pending subscriptions." << std::endl;
+        subscribe(pending_subscriptions_);
+        pending_subscriptions_.clear();
+    }
 }
 
 void UpstoxIngester::on_read(beast::error_code ec, std::size_t bytes_transferred) {
@@ -267,19 +388,27 @@ void UpstoxIngester::on_read(beast::error_code ec, std::size_t bytes_transferred
 }
 
 void UpstoxIngester::subscribe(const std::vector<std::string>& symbols) {
-    if (symbols.empty() || !ws_) return;
+    std::cout << "[DEBUG] subscribe() called with " << symbols.size() << " symbols." << std::endl;
+    if (symbols.empty()) return;
+
+    if (!ws_ || !ws_->is_open()) {
+        std::cout << "[Upstox] Caching " << symbols.size() << " symbols for async subscription." << std::endl;
+        pending_subscriptions_ = symbols;
+        return;
+    }
 
     json j;
     j["guid"] = "alpha_hft_session_" + std::to_string(alpha::time::Timestamp::now_ns());
     j["method"] = "sub";
     j["data"] = {
         {"mode", "full"},
-        {"instrument_keys", symbols}
+        {"instrumentKeys", symbols}
     };
 
     std::string frame = j.dump();
-    std::cout << "[Upstox] Sending subscription frame for " << symbols.size() << " symbols." << std::endl;
+    std::cout << "[Upstox] Sending V3 subscription frame for " << symbols.size() << " symbols." << std::endl;
     
+    ws_->binary(true);
     ws_->async_write(net::buffer(frame), [this](beast::error_code ec, std::size_t bytes) {
         boost::ignore_unused(bytes);
         if (ec) std::cerr << "[Upstox] Subscription write error: " << ec.message() << std::endl;
@@ -302,43 +431,46 @@ std::vector<Candle> UpstoxIngester::fetch_historical(const std::string& symbol,
 }
 
 void UpstoxIngester::on_message(const std::string& data) {
-    if (!ring_buffer_) return;
+    if (!ring_buffer_ || data.empty()) return;
 
     com::upstox::marketdata::v3::MarketDataFeed::FeedResponse response;
-    if (!response.ParseFromString(data)) {
-        std::cerr << "[WARN] Failed to parse Upstox Protobuf payload." << std::endl;
+    bool parsed = false;
+
+    if (response.ParseFromString(data)) {
+        parsed = true;
+    } else if (data.size() > 1 && response.ParseFromArray(data.data() + 1, data.size() - 1)) {
+        parsed = true;
+    }
+
+    if (!parsed) {
+        std::cerr << "[Upstox] CRITICAL: Protobuf parse failure. Size: " << data.size() << std::endl;
         return;
     }
 
-    // High Performance Iterator loop
     for (auto const& [key, instrument_data] : response.feeds()) {
         auto it = instrument_map_.find(key);
-        if (it == instrument_map_.end()) {
-            // Unregistered token, skip processing! O(1) mitigation of garbage bandwidth.
-            continue;
-        }
+        if (it == instrument_map_.end()) continue;
 
         Tick t;
         t.instrument_token = it->second;
+        t.last_price = 0.0;
 
         if (instrument_data.has_ltp_data()) {
-            auto const& ltp = instrument_data.ltp_data();
-            t.last_price = ltp.last_price();
-            t.timestamp_ns = ltp.last_tick_time() * 1000000ULL; // Upstox provides ms, convert to ns
-            ring_buffer_->push(t);
-
+            t.last_price = instrument_data.ltp_data().last_price();
+            t.timestamp_ns = instrument_data.ltp_data().last_tick_time() * 1000000ULL;
         } else if (instrument_data.has_full_data()) {
             auto const& full = instrument_data.full_data();
-            t.last_price = full.ltp().last_price();
-            t.timestamp_ns = full.ltp().last_tick_time() * 1000000ULL;
+            if (full.has_ltp()) {
+                t.last_price = full.ltp().last_price();
+                t.timestamp_ns = full.ltp().last_tick_time() * 1000000ULL;
+            }
             t.total_volume = full.volume_traded_today();
             t.vwap = full.average_price();
-            // Upstox schema extension: close_price could optionally map if structurally required
-
+            
+            // Populate Market Depth
             if (full.has_market_depth()) {
                 auto const& depth = full.market_depth();
                 for (int i = 0; i < depth.bids_size() && i < 5; ++i) {
-                    t.bids[i] = {
                         .price = depth.bids(i).price(),
                         .quantity = static_cast<uint32_t>(depth.bids(i).quantity()),
                         .orders = static_cast<uint32_t>(depth.bids(i).orders())

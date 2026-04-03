@@ -39,15 +39,23 @@ int main(int argc, char* argv[]) {
             // 4. Connect to Real-time Stream
             ingester->connect_feed();
             if (!symbols_env.empty()) {
+                std::cout << "[DEBUG] INGEST_SYMBOLS found: " << symbols_env << std::endl;
                 std::vector<std::string> symbols;
                 std::stringstream ss(symbols_env);
                 std::string s;
                 while (std::getline(ss, s, ',')) {
-                    if (!s.empty()) symbols.push_back(s);
+                    if (!s.empty()) {
+                        std::cout << "[DEBUG] Adding symbol: " << s << std::endl;
+                        symbols.push_back(s);
+                    }
                 }
                 if (!symbols.empty()) {
                     ingester->subscribe(symbols);
+                } else {
+                    std::cout << "[DEBUG] WARNING: No valid symbols found after splitting." << std::endl;
                 }
+            } else {
+                std::cout << "[DEBUG] INGEST_SYMBOLS is empty in environment." << std::endl;
             }
             
             std::cout << "[IST " << alpha::time::Timestamp::now_ist_ns() << "] Monitoring " << vendor << " feed. Press Ctrl+C to terminate." << std::endl;
