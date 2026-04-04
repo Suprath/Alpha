@@ -3,31 +3,51 @@
 #include <chrono>
 #include "shm_reader/ShmReader.hpp"
 #include "shm_writer/ShmWriter.hpp"
+#include "core/TickAccumulator.hpp"
+#include "core/QuestDBClient.hpp"
+#include "pipelines/TickPipeline.hpp"
+#include "pipelines/BarPipeline.hpp"
 #include <alpha/models/MarketModels.hpp>
 #include <alpha/time/Timestamp.hpp>
 
 using namespace alpha::signal;
+using namespace alpha::signal::core;
+using namespace alpha::signal::pipelines;
 using namespace alpha::models;
 
 int main() {
-    std::cout << "=== Alpha Signal Engine v0.2.0 (Modular) ===" << std::endl;
+    std::cout << "=== Alpha Signal Engine v0.3.0 (Dual Pipeline) ===" << std::endl;
 
-    // 1. Initialize SHM Components
-    // Reader attaches to Ingester output
+    // 1. Initialize Components
     ShmReader reader("alpha_upstox_shm_v2", "tick_queue");
-    
-    // Writer creates Signal Engine output
     ShmWriter writer("alpha_signal_shm_v1", "signal_queue");
+    
+    // Core Infrastructure
+    QuestDBClient qdb("questdb", 9009);
+    
+    // Analytic Pipelines
+    TickPipeline tick_pipeline;
+    BarPipeline bar_pipeline;
+    
+    // OHLCV Aggregator (Bridge between Pipeline 1 and 2)
+    TickAccumulator aggregator([&](const Candle& bar) {
+        // --- ON BAR CLOSE ---
+        std::string symbol = "TOKEN_" + std::to_string(bar.timestamp_ns); // Placeholder
+        qdb.write_candle(bar, symbol);
+        bar_pipeline.on_bar(bar);
+        std::cout << "[BAR] Closed 1m Bar: " << symbol << " @ " << bar.close << std::endl;
+    });
 
     try {
         reader.wait_for_attachment();
         writer.initialize();
+        qdb.connect();
     } catch (const std::exception& e) {
         std::cerr << "[CORE] Initialization failed: " << e.what() << std::endl;
         return 1;
     }
 
-    std::cout << "[CORE] Spinning Engine Loop Started (Lock-Free)." << std::endl;
+    std::cout << "[CORE] Dual-Pipeline Loop Started (Tick + Bar)." << std::endl;
 
     Tick t;
     uint32_t ticks_processed = 0;
@@ -37,28 +57,15 @@ int main() {
         if (reader.poll(t)) {
             ticks_processed++;
 
-            // --- Calculation Placeholder ---
-            // In the future, this is where we call strategy.on_tick(t)
+            // Pipeline 1: Microsecond Tick Logic
+            tick_pipeline.on_tick(t);
             
-            // Example: Generate a dummy signal every 10,000 ticks
-            if (ticks_processed % 10000 == 0) {
-                Signal sig {};
-                sig.timestamp_ns = alpha::time::Timestamp::now_ns();
-                sig.instrument_token = t.instrument_token;
-                sig.price = t.last_price;
-                sig.confidence = 0.85;
-                sig.action = 1; // Buy
-                sig.strategy_id = 101;
-                
-                writer.publish(sig);
-                
-                std::cout << "[SIGNAL] Published Signal for Token " << t.instrument_token 
-                          << " @ " << t.last_price << std::endl;
-            }
+            // Bridge: Accumulate into 1m Bars
+            aggregator.process_tick(t);
 
-            // Simple status log
-            if (ticks_processed % 100000 == 0) {
-                std::cout << "[CORE] Processed " << ticks_processed << " ticks total." << std::endl;
+            // Simple status log every 1M ticks
+            if (ticks_processed % 1000000 == 0) {
+                std::cout << "[CORE] Velocity Check: " << ticks_processed << " ticks total." << std::endl;
             }
         }
     }

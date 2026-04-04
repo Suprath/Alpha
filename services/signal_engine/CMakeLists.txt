@@ -21,6 +21,10 @@ add_executable(alpha-signal-engine
 
 target_include_directories(alpha-signal-engine PRIVATE 
     src
+    src/shm_reader
+    src/shm_writer
+    src/core
+    src/pipelines
     ../../shared/cpp/include
 )
 
