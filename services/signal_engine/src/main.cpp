@@ -1,49 +1,64 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
-#include <alpha/ipc/ShmManager.hpp>
-#include <alpha/ipc/RingBuffer.hpp>
+#include "shm_reader/ShmReader.hpp"
+#include "shm_writer/ShmWriter.hpp"
 #include <alpha/models/MarketModels.hpp>
+#include <alpha/time/Timestamp.hpp>
 
-using namespace alpha::ipc;
+using namespace alpha::signal;
 using namespace alpha::models;
 
 int main() {
-    std::cout << "=== Alpha Signal Engine v0.1.0 ===" << std::endl;
-    std::cout << "[IPC] Attempting to attach to Upstox Ingester stream..." << std::endl;
+    std::cout << "=== Alpha Signal Engine v0.2.0 (Modular) ===" << std::endl;
 
-    ShmManager upstox_shm("alpha_upstox_shm_v2", ShmRole::CONSUMER);
+    // 1. Initialize SHM Components
+    // Reader attaches to Ingester output
+    ShmReader reader("alpha_upstox_shm_v2", "tick_queue");
+    
+    // Writer creates Signal Engine output
+    ShmWriter writer("alpha_signal_shm_v1", "signal_queue");
 
-    // Wait and attach loop if Ingester isn't ready
-    SPSCRingBuffer<Tick, 65536>* ring_buffer = nullptr;
-    while (!ring_buffer) {
-        try {
-            ring_buffer = upstox_shm.get_or_create_buffer<SPSCRingBuffer<Tick, 65536>>("tick_queue");
-            std::cout << "[IPC] Successfully attached to alpha_upstox_shm_v2/tick_queue." << std::endl;
-        } catch (...) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
+    try {
+        reader.wait_for_attachment();
+        writer.initialize();
+    } catch (const std::exception& e) {
+        std::cerr << "[CORE] Initialization failed: " << e.what() << std::endl;
+        return 1;
     }
 
-    std::cout << "[CORE] Spinning Engine Loop Started." << std::endl;
+    std::cout << "[CORE] Spinning Engine Loop Started (Lock-Free)." << std::endl;
 
     Tick t;
     uint32_t ticks_processed = 0;
-    uint64_t start_time = alpha::time::Timestamp::now_ns();
 
-    // Constant-time O(1) Spin Loop (100% CPU on 1 Core in production)
+    // Constant-time O(1) Spin Loop
     while (true) {
-        if (ring_buffer->pop(t)) {
+        if (reader.poll(t)) {
             ticks_processed++;
-            // Log every tick for testing
-            std::cout << "[SIGNAL] Processed " << ticks_processed << " ticks. "
-                      << "Last Price (Token " << t.instrument_token << "): " 
-                      << t.last_price << std::endl;
-            // Check overflow metrics
-            uint64_t drops = ring_buffer->overflow_counter.load(std::memory_order_relaxed);
-            if (drops > 0) {
-                // Warning! The Engine is too slow!
-                std::cout << "[WARN] Ingester Dropped " << drops << " ticks due to Engine Lag!" << std::endl;
+
+            // --- Calculation Placeholder ---
+            // In the future, this is where we call strategy.on_tick(t)
+            
+            // Example: Generate a dummy signal every 10,000 ticks
+            if (ticks_processed % 10000 == 0) {
+                Signal sig {};
+                sig.timestamp_ns = alpha::time::Timestamp::now_ns();
+                sig.instrument_token = t.instrument_token;
+                sig.price = t.last_price;
+                sig.confidence = 0.85;
+                sig.action = 1; // Buy
+                sig.strategy_id = 101;
+                
+                writer.publish(sig);
+                
+                std::cout << "[SIGNAL] Published Signal for Token " << t.instrument_token 
+                          << " @ " << t.last_price << std::endl;
+            }
+
+            // Simple status log
+            if (ticks_processed % 100000 == 0) {
+                std::cout << "[CORE] Processed " << ticks_processed << " ticks total." << std::endl;
             }
         }
     }

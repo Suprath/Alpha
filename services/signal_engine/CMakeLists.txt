@@ -12,7 +12,19 @@ include_directories(../../shared/cpp/include)
 find_package(Boost REQUIRED)
 include_directories(${Boost_INCLUDE_DIRS})
 
-# Executable
-add_executable(alpha-signal-engine src/main.cpp)
+# Main Binary
+add_executable(alpha-signal-engine 
+    src/main.cpp
+    src/shm_reader/ShmReader.cpp
+    src/shm_writer/ShmWriter.cpp
+)
 
-target_link_libraries(alpha-signal-engine pthread rt)
+target_include_directories(alpha-signal-engine PRIVATE 
+    src
+    ../../shared/cpp/include
+)
+
+target_link_libraries(alpha-signal-engine PRIVATE 
+    pthread 
+    rt
+)
