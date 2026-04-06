@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <alpha/models/MarketModels.hpp>
+#include "EnhancedBar.hpp"
 
 namespace alpha::signal::core {
 
@@ -47,6 +48,38 @@ public:
         
         std::cout << "[QuestDB] Connected to ILP port at " << host_ << ":" << port_ << std::endl;
         return true;
+    }
+
+    /**
+     * @brief Send an EnhancedBar to QuestDB using ILP.
+     * Writes all bar fields: OHLCV, VWAP, buy/sell volume, tick count, bar OFI.
+     */
+    void write_enhanced_bar(const EnhancedBar& bar, const std::string& symbol,
+                            const std::string& interval = "1m") {
+        if (sock_ == -1) return;
+
+        std::stringstream ss;
+        ss << "candles,symbol=" << symbol << ",interval=" << interval << " "
+           << "open="         << bar.open         << ","
+           << "high="         << bar.high         << ","
+           << "low="          << bar.low          << ","
+           << "close="        << bar.close        << ","
+           << "volume="       << bar.volume       << "i,"
+           << "vwap="         << bar.vwap         << ","
+           << "buy_volume="   << bar.buy_volume   << "i,"
+           << "sell_volume="  << bar.sell_volume  << "i,"
+           << "tick_count="   << bar.tick_count   << "i,"
+           << "bar_ofi="      << bar.bar_ofi      << ","
+           << "open_interest=" << bar.open_interest << " "
+           << bar.timestamp_ns << "\n";
+
+        std::string payload = ss.str();
+        ssize_t sent = send(sock_, payload.c_str(), payload.size(), 0);
+        if (sent < 0) {
+            std::cerr << "[QuestDB] Failed to send enhanced bar." << std::endl;
+            ::close(sock_);
+            sock_ = -1;
+        }
     }
 
     /**
