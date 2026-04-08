@@ -13,7 +13,7 @@ find_package(Boost REQUIRED)
 include_directories(${Boost_INCLUDE_DIRS})
 
 # Main Binary
-add_executable(alpha-signal-engine 
+add_executable(alpha-signal-engine
     src/main.cpp
     src/shm_reader/ShmReader.cpp
     src/shm_writer/ShmWriter.cpp
@@ -29,7 +29,45 @@ target_include_directories(alpha-signal-engine PRIVATE
     ../../shared/cpp/include
 )
 
-target_link_libraries(alpha-signal-engine PRIVATE 
-    pthread 
+target_link_libraries(alpha-signal-engine PRIVATE
+    pthread
     rt
 )
+
+# Testing — all signal calculators are header-only; no extra .cpp sources needed
+enable_testing()
+find_package(GTest REQUIRED)
+find_package(Threads REQUIRED)
+
+add_executable(alpha-signal-engine-test
+    ../../tests/unit/signal_engine_test.cpp
+)
+
+target_include_directories(alpha-signal-engine-test PRIVATE
+    src
+    src/core
+    src/pipelines
+    src/signals
+    src/signals/ofi
+    src/signals/trade_direction
+    src/signals/vpin
+    src/signals/kyles_lambda
+    src/signals/entropy
+    src/signals/bar
+    src/signals/options
+    src/signals/derived
+    ../../shared/cpp/include
+)
+
+target_link_libraries(alpha-signal-engine-test
+    GTest::gtest_main
+    Threads::Threads
+)
+
+target_compile_options(alpha-signal-engine-test PRIVATE
+    -O2
+    -Wall
+    -Wextra
+)
+
+add_test(NAME SignalEngineUnitTests COMMAND alpha-signal-engine-test)
