@@ -123,6 +123,28 @@ services:
           cpus: '2.0'
           memory: 1G
 
+  strategy-engine:
+    build:
+      context: .
+      dockerfile: services/strategy_engine/Dockerfile
+    image: alpha-strategy-engine:latest
+    container_name: alpha-strategy-engine
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Kolkata
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    # Mapped directly to the host's /dev/shm space for sub-microsecond IPC with signal engine
+    ipc: host
+    depends_on:
+      - signal-engine
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
   redis:
     build:
       context: ./infra/redis

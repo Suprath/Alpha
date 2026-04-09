@@ -16,7 +16,7 @@ using namespace alpha::signal::pipelines;
 using namespace alpha::models;
 
 int main() {
-    std::cout << "=== Alpha Signal Engine v0.4.0 (Unified Pipeline) ===" << std::endl;
+    std::cout << "=== Alpha Signal Engine v0.5.0 (Derived Pipeline) ===" << std::endl;
 
     // 1. Initialize infrastructure
     ShmReader reader("alpha_upstox_shm_v2", "tick_queue");
@@ -31,22 +31,18 @@ int main() {
 
     // 3. Wire bar-close callback into TickPipeline.
     //    Fires once per minute per instrument (infrequent — std::function overhead is fine).
+    //    Captures tick_pipeline by ref to read the latest tick signal snapshot at bar close.
     tick_pipeline.set_bar_callback([&](const EnhancedBar& bar) {
         const std::string symbol = "TOKEN_" + std::to_string(bar.instrument_token);
 
         // Persist to QuestDB (OHLCV + VWAP + signed vol + OFI_bar)
         qdb.write_enhanced_bar(bar, symbol);
 
-        // Bar-level signal processing (Kalman, CUSUM, ...)
-        bar_pipeline.on_bar(bar);
+        // Snapshot of tick-level signals at this bar close — feeds the SignalBundle
+        const auto snap = tick_pipeline.get_snapshot(bar.instrument_token);
 
-        std::cout << "[BAR] " << symbol
-                  << "  C="       << bar.close
-                  << "  V="       << bar.volume
-                  << "  VWAP="    << bar.vwap
-                  << "  OFI_bar=" << bar.bar_ofi
-                  << "  N="       << bar.tick_count
-                  << std::endl;
+        // Bar-level signal processing (Kalman, CUSUM, CompositeScore, AlphaDecay, PnL)
+        bar_pipeline.on_bar(bar, snap);
     });
 
     // 4. Initialize connections
@@ -59,12 +55,16 @@ int main() {
         return 1;
     }
 
+    // 5. Wire ShmWriter into pipelines so signals are published to shared memory.
+    tick_pipeline.set_shm_writer(&writer);
+    bar_pipeline.set_shm_writer(&writer);
+
     std::cout << "[CORE] Unified Pipeline Started." << std::endl;
 
     Tick t;
     uint32_t ticks_processed = 0;
 
-    // 5. O(1) Spin Loop
+    // 6. O(1) Spin Loop
     //    on_tick() runs all tick signals AND feeds the bar accumulator.
     //    Bar close fires the callback above automatically.
     while (true) {
