@@ -145,6 +145,29 @@ services:
           cpus: '1.0'
           memory: 512M
 
+  market-engine:
+    build:
+      context: .
+      dockerfile: services/market_engine/Dockerfile
+    image: alpha-market-engine:latest
+    container_name: alpha-market-engine
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Kolkata
+      - STARTING_CAPITAL=1000000   # ₹10,00,000 starting paper capital
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    # ipc: host required to read from alpha_order_shm_v1 (written by strategy-engine)
+    ipc: host
+    depends_on:
+      - strategy-engine
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 256M
+
   redis:
     build:
       context: ./infra/redis

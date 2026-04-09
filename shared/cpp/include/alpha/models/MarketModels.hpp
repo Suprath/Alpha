@@ -104,13 +104,32 @@ struct Candle {
         uint64_t timestamp_ns;
         uint32_t instrument_token;
         char symbol[32]; // Fixed-size string for SHM
-        
+
         // Signal Data
         double price;
         double confidence; // 0.0 to 1.0
         int32_t action;    // 1: Buy, -1: Sell, 0: Neutral
-        
+
         // Placeholder for future metadata (e.g., strategy ID)
+        uint32_t strategy_id;
+    };
+
+    /**
+     * @brief Order decision emitted by the Strategy Engine.
+     * POD struct — zero-copy shared memory compatible.
+     *
+     * side:   1=BUY, -1=SELL
+     * reason: 1=ENTRY, 2=EXIT, 3=SCALE_IN, 4=SCALE_OUT, 5=REVERSE
+     */
+    struct OrderIntent {
+        uint64_t timestamp_ns;
+        uint32_t instrument_token;
+        char     symbol[32];
+        double   price;        // Reference price at signal time
+        int32_t  qty;          // Absolute units to trade
+        int32_t  side;         // 1=BUY, -1=SELL
+        int32_t  reason;       // Order reason (see above)
+        double   confidence;   // Kelly fraction [0, 1]
         uint32_t strategy_id;
     };
 
