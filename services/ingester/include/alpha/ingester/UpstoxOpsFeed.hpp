@@ -35,7 +35,7 @@ public:
 
 protected:
     void handle_message(const std::string& data) override;
-    std::string get_feed_url() const override { return "/v3/market_data/feed"; } 
+    std::string get_feed_url() const override { return "/v3/feed/market-data-feed"; }
 
 private:
     void ensure_qdb_connection();

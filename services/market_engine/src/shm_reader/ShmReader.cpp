@@ -11,12 +11,12 @@ ShmReader::ShmReader(const std::string& segment_name, const std::string& buffer_
 }
 
 void ShmReader::wait_for_attachment() {
-    std::cout << "[ShmReader] Waiting for " << segment_name_ << "/" << buffer_name_ << "...\n";
+    std::cout << "[ShmReader] Waiting for " << segment_name_ << "/" << buffer_name_ << "..." << std::endl;
     while (!ring_buffer_) {
         try {
             ring_buffer_ = shm_manager_->get_or_create_buffer<
                 alpha::ipc::SPSCRingBuffer<alpha::models::OrderIntent, 4096>>(buffer_name_);
-            std::cout << "[ShmReader] Attached to order SHM segment.\n";
+            std::cout << "[ShmReader] Attached to order SHM segment." << std::endl;
         } catch (...) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }

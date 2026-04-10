@@ -27,14 +27,17 @@ public:
           instrument_map_(instrument_map) {}
 
     void subscribe(const std::vector<std::string>& symbols) override;
+    void handle_message(const std::string& data) override;
 
 protected:
-    void handle_message(const std::string& data) override;
-    std::string get_feed_url() const override { return "/v3/market_data/feed"; }
+    std::string get_feed_url() const override { return "/v3/feed/market-data-feed"; }
+    void on_connected() override;
 
 private:
     alpha::ipc::SPSCRingBuffer<Tick, 65536>* ring_buffer_;
     const std::unordered_map<std::string, uint32_t>& instrument_map_;
+    std::vector<std::string> pending_symbols_;
+    std::string sub_msg_; // Kept alive for async_write duration
 };
 
 } // namespace alpha::ingester

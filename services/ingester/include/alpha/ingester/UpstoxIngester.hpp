@@ -34,6 +34,12 @@ public:
     bool authenticate(const std::string& auth_code = "") override;
     void connect_feed() override;
     void subscribe(const std::vector<std::string>& symbols) override;
+
+    // Returns all instrument keys loaded from DB (used for auto-subscribe)
+    std::vector<std::string> all_instrument_keys() const;
+
+    // Test hook: manually populate instrument map without a DB connection
+    void inject_manual_instrument_for_testing(const std::string& key, uint32_t token);
     std::vector<Candle> fetch_historical(const std::string& symbol, 
                                         const std::string& interval,
                                         const std::string& from, 

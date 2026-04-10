@@ -31,7 +31,7 @@ static void signal_handler(int) {
 }
 
 int main() {
-    std::cout << "=== Alpha Market Engine v0.1.0 (Indian Markets Paper Trader) ===\n";
+    std::cout << "=== Alpha Market Engine v0.1.0 (Indian Markets Paper Trader) ===" << std::endl;
 
     std::signal(SIGINT,  signal_handler);
     std::signal(SIGTERM, signal_handler);
@@ -42,7 +42,7 @@ int main() {
         ? std::stod(capital_env)
         : alpha::market::PortfolioManager::DEFAULT_STARTING_CAPITAL;
 
-    std::cout << "[Main] Starting capital: ₹" << starting_capital << "\n";
+    std::cout << "[Main] Starting capital: " << starting_capital << std::endl;
 
     // -- SHM Reader: consumes OrderIntents from strategy engine --
     alpha::market::ShmReader reader("alpha_order_shm_v1", "order_queue");
@@ -51,7 +51,7 @@ int main() {
     // -- Market Engine: paper trading + portfolio --
     alpha::market::MarketEngine engine(starting_capital);
 
-    std::cout << "[Main] Entering order processing loop...\n";
+    std::cout << "[Main] Entering order processing loop..." << std::endl;
 
     alpha::models::OrderIntent intent{};
     uint64_t last_portfolio_print_ns = alpha::time::Timestamp::now_ns();

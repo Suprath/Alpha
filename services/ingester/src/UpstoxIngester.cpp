@@ -85,8 +85,24 @@ std::vector<Candle> UpstoxIngester::fetch_historical(const std::string& symbol, 
     return {}; 
 }
 
-void UpstoxIngester::on_message([[maybe_unused]] const std::string& data) {
-    // Manual injection point for testing
+void UpstoxIngester::on_message(const std::string& data) {
+    if (live_feed_) {
+        live_feed_->handle_message(data);
+    }
+}
+
+void UpstoxIngester::inject_manual_instrument_for_testing(const std::string& key, uint32_t token) {
+    instrument_map_[key]       = token;
+    token_to_symbol_map_[token] = key;
+}
+
+std::vector<std::string> UpstoxIngester::all_instrument_keys() const {
+    std::vector<std::string> keys;
+    keys.reserve(instrument_map_.size());
+    for (auto const& [k, _] : instrument_map_) {
+        keys.push_back(k);
+    }
+    return keys;
 }
 
 void UpstoxIngester::process_backfill_queue() {
@@ -222,9 +238,20 @@ void UpstoxIngester::save_token(const std::string& token) {
 }
 
 std::string UpstoxIngester::load_token() {
+    // 1. Prefer persisted token file (most recently authenticated session)
     std::ifstream file("/app/secrets/.upstox_token.json");
-    if (!file.is_open()) return "";
-    try { json j; file >> j; return j["access_token"]; } catch (...) { return ""; }
+    if (file.is_open()) {
+        try {
+            json j;
+            file >> j;
+            std::string t = j["access_token"];
+            if (!t.empty()) return t;
+        } catch (...) {}
+    }
+    // 2. Fall back to UPSTOX_ACCESS_TOKEN env var (set in .env / docker-compose)
+    const char* env_token = std::getenv("UPSTOX_ACCESS_TOKEN");
+    if (env_token && env_token[0] != '\0') return env_token;
+    return "";
 }
 
 void UpstoxIngester::schedule_heartbeat() {

@@ -5,13 +5,15 @@
 
 namespace alpha::ingester {
 
+using namespace com::upstox::marketdatafeederv3udapi::rpc::proto;
+
 UpstoxOpsFeed::UpstoxOpsFeed(net::io_context& ioc, ssl::context& ssl_ctx,
                              const std::string& qdb_host, int qdb_ilp_port,
                              const std::unordered_map<uint32_t, std::string>& token_map)
     : UpstoxFeed(ioc, ssl_ctx),
       qdb_host_(qdb_host), qdb_ilp_port_(qdb_ilp_port),
       token_to_symbol_map_(token_map) {
-    
+
     worker_thread_ = std::thread(&UpstoxOpsFeed::worker_loop, this);
 }
 
@@ -24,54 +26,55 @@ UpstoxOpsFeed::~UpstoxOpsFeed() {
 }
 
 void UpstoxOpsFeed::handle_message(const std::string& data) {
-    Upstox::MarketDataFeed feed;
+    FeedResponse feed;
     if (!feed.ParseFromString(data)) return;
 
     for (auto const& [key, value] : feed.feeds()) {
-        if (value.has_ff()) {
-            auto const& ff = value.ff();
-            auto const& market_ff = ff.marketff();
-            
-            // 1. Persist Greeks/IV if available
-            if (market_ff.has_optiongreeks() || market_ff.iv() > 0) {
-                auto const& g_proto = market_ff.optiongreeks();
-                OptionGreeks g;
-                g.delta = g_proto.delta();
-                g.gamma = g_proto.gamma();
-                g.theta = g_proto.theta();
-                g.vega = g_proto.vega();
-                g.rho = g_proto.rho();
-                g.iv = market_ff.iv();
-                persist_greeks(key, g, alpha::time::Timestamp::now_ns());
-            }
+        if (!value.has_fullfeed() || !value.fullfeed().has_marketff()) continue;
 
-            // 2. Persist Tick
-            Tick t;
-            t.last_price = market_ff.ltp();
-            t.total_volume = market_ff.vtt();
-            t.open_interest = market_ff.oi();
-            
-            if (market_ff.has_bids() && market_ff.bids().size() > 0) {
-                t.bid_price = market_ff.bids(0).price();
-                t.bid_size = market_ff.bids(0).quantity();
-            }
-            if (market_ff.has_asks() && market_ff.asks().size() > 0) {
-                t.ask_price = market_ff.asks(0).price();
-                t.ask_size = market_ff.asks(0).quantity();
-            }
-            
-            t.timestamp_ns = alpha::time::Timestamp::now_ns();
-            persist_tick_by_symbol(key, t);
+        auto const& ff        = value.fullfeed();
+        auto const& market_ff = ff.marketff();
 
-            // 3. Persist various timeframes
-            for (auto const& ohlc : market_ff.ohlc()) {
+        // 1. Persist Greeks/IV if available
+        if (market_ff.has_optiongreeks() || market_ff.iv() > 0) {
+            auto const& g_proto = market_ff.optiongreeks();
+            OptionGreeks g;
+            g.delta = g_proto.delta();
+            g.gamma = g_proto.gamma();
+            g.theta = g_proto.theta();
+            g.vega  = g_proto.vega();
+            g.rho   = g_proto.rho();
+            g.iv    = market_ff.iv();
+            persist_greeks(key, g, alpha::time::Timestamp::now_ns());
+        }
+
+        // 2. Persist Tick
+        Tick t;
+        t.last_price    = market_ff.ltpc().ltp();
+        t.total_volume  = static_cast<uint64_t>(market_ff.vtt());
+        t.open_interest = market_ff.oi();
+
+        if (market_ff.has_marketlevel() && market_ff.marketlevel().bidaskquote_size() > 0) {
+            const auto& q0 = market_ff.marketlevel().bidaskquote(0);
+            t.bid_price = q0.bidp();
+            t.bid_size  = static_cast<uint32_t>(q0.bidq());
+            t.ask_price = q0.askp();
+            t.ask_size  = static_cast<uint32_t>(q0.askq());
+        }
+
+        t.timestamp_ns = alpha::time::Timestamp::now_ns();
+        persist_tick_by_symbol(key, t);
+
+        // 3. Persist various timeframes
+        if (market_ff.has_marketohlc()) {
+            for (auto const& ohlc : market_ff.marketohlc().ohlc()) {
                 Candle c;
-                c.open = ohlc.open();
-                c.high = ohlc.high();
-                c.low = ohlc.low();
-                c.close = ohlc.close();
-                c.volume = ohlc.vol();
-                c.timestamp_ns = ohlc.ts();
+                c.open          = ohlc.open();
+                c.high          = ohlc.high();
+                c.low           = ohlc.low();
+                c.close         = ohlc.close();
+                c.volume        = static_cast<uint64_t>(ohlc.vol());
+                c.timestamp_ns  = static_cast<uint64_t>(ohlc.ts());
                 c.open_interest = market_ff.oi();
                 persist_candle(c, key, ohlc.interval());
             }
@@ -80,13 +83,13 @@ void UpstoxOpsFeed::handle_message(const std::string& data) {
 }
 
 void UpstoxOpsFeed::persist_candle(const Candle& c, const std::string& symbol, const std::string& interval) {
-    std::string line = "candles,symbol=" + symbol + 
+    std::string line = "candles,symbol=" + symbol +
                        ",interval=" + interval +
                        " open=" + std::to_string(c.open) +
                        ",high=" + std::to_string(c.high) +
                        ",low=" + std::to_string(c.low) +
                        ",close=" + std::to_string(c.close) +
-                       ",volume=" + std::to_string(c.volume) + "i" + // Signed long in QuestDB
+                       ",volume=" + std::to_string(c.volume) + "i" +
                        ",open_interest=" + std::to_string(c.open_interest) +
                        " " + std::to_string(c.timestamp_ns) + "\n";
     push_to_queue(line);
@@ -100,7 +103,7 @@ void UpstoxOpsFeed::persist_tick(const Tick& t) {
 }
 
 void UpstoxOpsFeed::persist_tick_by_symbol(const std::string& symbol, const Tick& t) {
-    std::string line = "ticks,symbol=" + symbol + 
+    std::string line = "ticks,symbol=" + symbol +
                        " price=" + std::to_string(t.last_price) +
                        ",volume=" + std::to_string(t.total_volume) + "i" +
                        ",bid_price=" + std::to_string(t.bid_price) +
@@ -113,7 +116,7 @@ void UpstoxOpsFeed::persist_tick_by_symbol(const std::string& symbol, const Tick
 }
 
 void UpstoxOpsFeed::persist_greeks(const std::string& symbol, const OptionGreeks& g, uint64_t ts_ns) {
-    std::string line = "option_greeks,symbol=" + symbol + 
+    std::string line = "option_greeks,symbol=" + symbol +
                        " iv=" + std::to_string(g.iv) +
                        ",delta=" + std::to_string(g.delta) +
                        ",theta=" + std::to_string(g.theta) +
@@ -190,7 +193,5 @@ void UpstoxOpsFeed::ensure_qdb_connection() {
         qdb_socket_.reset();
     }
 }
-
-} // namespace alpha::ingester
 
 } // namespace alpha::ingester

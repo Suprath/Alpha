@@ -25,7 +25,7 @@ static void signal_handler(int) {
 }
 
 int main() {
-    std::cout << "=== Alpha Strategy Engine v0.2.0 ===\n";
+    std::cout << "=== Alpha Strategy Engine v0.2.0 ===" << std::endl;
 
     std::signal(SIGINT,  signal_handler);
     std::signal(SIGTERM, signal_handler);
@@ -41,7 +41,7 @@ int main() {
     // -- Strategy Engine: position management + risk --
     alpha::strategy::StrategyEngine engine;
 
-    std::cout << "[Main] Entering signal processing loop...\n";
+    std::cout << "[Main] Entering signal processing loop..." << std::endl;
 
     alpha::models::Signal       sig{};
     alpha::strategy::OrderIntent intent{};

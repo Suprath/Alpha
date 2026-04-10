@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     libboost-system-dev \
     libboost-dev \
+    libgtest-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
