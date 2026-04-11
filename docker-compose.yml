@@ -184,9 +184,71 @@ services:
       - /etc/timezone:/etc/timezone:ro
       - redis_data:/data
 
+  backfill-engine:
+    build:
+      context: .
+      dockerfile: services/backfill_engine/Dockerfile
+    image: alpha-backfill-engine:latest
+    container_name: alpha-backfill-engine
+    restart: "no"  # Run-to-completion job, not a daemon
+    environment:
+      - TZ=Asia/Kolkata
+      - POSTGRES_HOST=postgres-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=alpha_db
+      - POSTGRES_USER=alpha_user
+      - POSTGRES_PASSWORD=alpha_password
+      - QUESTDB_HOST=questdb
+      - QUESTDB_ILP_PORT=9009
+      # Backfill range — override via docker-compose run or .env
+      - BACKFILL_INTERVAL=1minute
+      - BACKFILL_FROM_DATE=2024-01-01
+      # BACKFILL_TO_DATE defaults to today
+    env_file:
+      - .env
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    depends_on:
+      - postgres-db
+      - questdb
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  backtest-engine:
+    build:
+      context: .
+      dockerfile: services/backtest_engine/Dockerfile
+    image: alpha-backtest-engine:latest
+    container_name: alpha-backtest-engine
+    restart: "no"  # Run-to-completion job
+    environment:
+      - TZ=Asia/Kolkata
+      - QUESTDB_HOST=questdb
+      - BACKTEST_DATA_DIR=/data/backtest
+      - STARTING_CAPITAL=1000000
+      - BROKERAGE_FLAT=20
+      - SLIPPAGE_BPS=2
+      - BATCH_SIZE=1024
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - alpha_backtest_data:/data/backtest
+    depends_on:
+      - questdb
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'    # Maximize CPU for hot-loop
+          memory: 4G     # Large page cache for mmap
+
 volumes:
   redis_data:
   alpha_secrets:
   alpha_pgdata:
   alpha_questdata:
+  alpha_backtest_data:
 
