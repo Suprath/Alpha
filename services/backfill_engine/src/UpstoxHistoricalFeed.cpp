@@ -219,7 +219,7 @@ size_t UpstoxHistoricalFeed::fetch_range(const HistoricalRequest& req,
 
     while (cursor <= t_to) {
         const time_t chunk_end =
-            std::min(cursor + static_cast<time_t>(chunk_days - 1) * 86400LL, t_to);
+            std::min(cursor + static_cast<time_t>(chunk_days - 1) * static_cast<time_t>(86400), t_to);
 
         char from_buf[12], to_buf[12];
         format_date(cursor,    from_buf, sizeof(from_buf));
@@ -232,7 +232,7 @@ size_t UpstoxHistoricalFeed::fetch_range(const HistoricalRequest& req,
         if (pre_fetch_cb) pre_fetch_cb();
         total += fetch(chunk_req, instrument_token, symbol, callback);
 
-        cursor = chunk_end + 86400LL;
+        cursor = chunk_end + static_cast<time_t>(86400);
     }
 
     return total;

@@ -2,6 +2,9 @@
 #include <alpha/config/Config.hpp>
 #include <alpha/time/Timestamp.hpp>
 #include <iostream>
+#include <atomic>
+#include <unordered_set>
+#include <string>
 
 namespace alpha::ingester {
 
@@ -35,30 +38,59 @@ void UpstoxLiveFeed::on_connected() {
 }
 
 void UpstoxLiveFeed::handle_message(const std::string& data) {
+    static std::atomic<uint64_t> msg_count{0};
+    uint64_t n = ++msg_count;
+    if (n <= 5 || n % 100 == 0) {
+        std::cout << "[Feed] msg#" << n << " size=" << data.size() << " bytes" << std::endl;
+    }
+
     FeedResponse feed;
     if (!feed.ParseFromString(data)) {
-        std::cout << "[Feed] Received non-protobuf message (" << data.size() << " bytes): " << data.substr(0, 120) << std::endl;
+        std::cout << "[Feed] Non-protobuf msg#" << n << " (" << data.size() << " bytes): " << data.substr(0, 120) << std::endl;
         return;
     }
 
     if (feed.feeds().empty()) {
         if (feed.type() == 2) {
-            // market_info message — market status update (normal when market is closed)
+            // market_info — log segment statuses once
             static bool logged_once = false;
             if (!logged_once) {
-                std::cout << "[Feed] Market info received (" << feed.marketinfo().segmentstatus_size()
-                          << " segments). Market may be closed." << std::endl;
                 logged_once = true;
+                const auto& mi = feed.marketinfo();
+                std::cout << "[Feed] Market status (" << mi.segmentstatus_size() << " segments):";
+                for (const auto& [seg_name, status] : mi.segmentstatus()) {
+                    std::cout << " [" << seg_name << "=" << status << "]";
+                }
+                std::cout << std::endl;
             }
+        } else {
+            // Log unexpected empty-feeds messages (e.g. subscription ACK, errors)
+            std::cout << "[Feed] Empty-feeds message type=" << feed.type()
+                      << " ts=" << feed.currentts() << std::endl;
         }
         return;
     }
 
+    // Diagnostic: count ticks and log first tick per instrument seen
+    static std::atomic<uint64_t> total_ticks{0};
+    static std::unordered_set<std::string> seen_keys;
+
     auto now = alpha::time::Timestamp::now_ns();
 
     for (auto const& [key, value] : feed.feeds()) {
+        if (seen_keys.find(key) == seen_keys.end()) {
+            seen_keys.insert(key);
+            std::cout << "[Feed] First tick for key=" << key
+                      << (instrument_map_.count(key) ? " (mapped)" : " (NOT IN MAP - check instrument_loader)")
+                      << std::endl;
+        }
+
         auto it = instrument_map_.find(key);
         if (it == instrument_map_.end()) continue;
+
+        if (++total_ticks % 500 == 0) {
+            std::cout << "[Feed] Ticks processed: " << total_ticks.load() << std::endl;
+        }
 
         Tick tick {};
         tick.instrument_token = it->second;

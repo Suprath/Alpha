@@ -72,7 +72,10 @@ bool UpstoxIngester::authenticate(const std::string& code) {
 void UpstoxIngester::connect_feed() {
     if (access_token_.empty()) return;
     live_feed_->connect(access_token_);
-    ops_feed_->connect(access_token_);
+    // ops_feed intentionally NOT connected: Upstox allows only one active
+    // market-data-feed session per token. A second authorize+connect invalidates
+    // the live_feed subscription and stops tick delivery.
+    // QuestDB persistence is handled by the signal engine and backfill engine.
 }
 
 void UpstoxIngester::subscribe(const std::vector<std::string>& symbols) {
@@ -221,7 +224,9 @@ void UpstoxIngester::load_instruments_from_db() {
     try {
         pqxx::connection c(conn_str);
         pqxx::work w(c);
-        pqxx::result r = w.exec("SELECT instrument_key, id FROM instrument_universe");
+        pqxx::result r = w.exec(
+            "SELECT instrument_key, id FROM instrument_universe "
+            "WHERE date = (SELECT MAX(date) FROM instrument_universe)");
         for (auto const& row : r) {
             std::string key = row["instrument_key"].as<std::string>();
             uint32_t id = row["id"].as<uint32_t>();

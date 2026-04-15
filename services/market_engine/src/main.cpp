@@ -31,6 +31,7 @@ static void signal_handler(int) {
 }
 
 int main() {
+    std::cout << std::unitbuf;   // Force line-unbuffered stdout in Docker
     std::cout << "=== Alpha Market Engine v0.1.0 (Indian Markets Paper Trader) ===" << std::endl;
 
     std::signal(SIGINT,  signal_handler);

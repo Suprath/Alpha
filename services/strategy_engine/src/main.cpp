@@ -13,6 +13,7 @@
 #include <iostream>
 #include <csignal>
 #include <atomic>
+#include <cstdlib>
 
 #include "shm_reader/ShmReader.hpp"
 #include "shm_writer/OrderShmWriter.hpp"
@@ -25,10 +26,22 @@ static void signal_handler(int) {
 }
 
 int main() {
+    std::cout << std::unitbuf;   // Force line-unbuffered stdout in Docker
     std::cout << "=== Alpha Strategy Engine v0.2.0 ===" << std::endl;
 
     std::signal(SIGINT,  signal_handler);
     std::signal(SIGTERM, signal_handler);
+
+    // -- Risk configuration (TEST_MODE bypasses market-hours gate for out-of-hours testing) --
+    const char* test_mode_env = std::getenv("TEST_MODE");
+    const bool  test_mode     = test_mode_env && std::string(test_mode_env) == "1";
+
+    alpha::strategy::RiskParams risk_params;
+    risk_params.bypass_market_hours = test_mode;
+
+    if (test_mode) {
+        std::cout << "[Main] TEST_MODE=1: market-hours check bypassed.\n";
+    }
 
     // -- SHM Reader: consumes Signal structs from signal engine --
     alpha::strategy::ShmReader reader("alpha_signal_shm_v1", "signal_queue");
@@ -39,7 +52,7 @@ int main() {
     order_writer.initialize();
 
     // -- Strategy Engine: position management + risk --
-    alpha::strategy::StrategyEngine engine;
+    alpha::strategy::StrategyEngine engine(risk_params);
 
     std::cout << "[Main] Entering signal processing loop..." << std::endl;
 

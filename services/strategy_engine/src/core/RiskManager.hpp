@@ -11,6 +11,7 @@ struct RiskParams {
     double  daily_loss_limit         = -50000.0; // INR; stop trading if breached
     int     market_open_hhmm         = 915;  // 09:15 IST
     int     market_close_hhmm        = 1530; // 15:30 IST
+    bool    bypass_market_hours      = false; // Set true via TEST_MODE to test outside trading hours
 };
 
 /**
@@ -36,6 +37,7 @@ public:
     }
 
     bool is_market_hours() const {
+        if (params_.bypass_market_hours) return true;
         std::time_t t = std::time(nullptr);
         std::tm* local = std::localtime(&t);
         int hhmm = local->tm_hour * 100 + local->tm_min;

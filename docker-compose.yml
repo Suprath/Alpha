@@ -1,4 +1,68 @@
 services:
+  # ── Python live feed: Upstox WebSocket → Redis Stream alpha:ticks ────────────
+  data-feed:
+    build:
+      context: .
+      dockerfile: services/data_feed/Dockerfile
+    image: alpha-data-feed:latest
+    container_name: alpha-data-feed
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Kolkata
+      - MODE=live
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=alpha_db
+      - POSTGRES_USER=alpha_user
+      - POSTGRES_PASSWORD=alpha_password
+      # Top 5 NSE large-cap liquid stocks
+      - INGEST_SYMBOLS=NSE_EQ|INE002A01018,NSE_EQ|INE467B01029,NSE_EQ|INE040A01034,NSE_EQ|INE009A01021,NSE_EQ|INE090A01021
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - postgres-db
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # ── Python historical feed: Upstox REST → QuestDB ILP (run-to-completion) ───
+  data-feed-historical:
+    build:
+      context: .
+      dockerfile: services/data_feed/Dockerfile
+    image: alpha-data-feed:latest
+    container_name: alpha-data-feed-historical
+    restart: "no"
+    environment:
+      - TZ=Asia/Kolkata
+      - MODE=historical
+      - POSTGRES_HOST=postgres-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=alpha_db
+      - POSTGRES_USER=alpha_user
+      - POSTGRES_PASSWORD=alpha_password
+      - QUESTDB_HOST=questdb
+      - QUESTDB_ILP_PORT=9009
+      - BACKFILL_INTERVAL=1minute
+      - BACKFILL_FROM_DATE=2024-01-01
+      # BACKFILL_TO_DATE defaults to today
+    env_file:
+      - .env
+    depends_on:
+      - postgres-db
+      - questdb
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # ── C++ ingester: Redis Stream alpha:ticks → SHM ring buffer ─────────────────
   ingester:
     build:
       context: .
@@ -10,30 +74,23 @@ services:
       - "9002:9000"
     environment:
       - TZ=Asia/Kolkata
-      - POSTGRES_HOST=postgres-db
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=alpha_db
-      - POSTGRES_USER=alpha_user
-      - POSTGRES_PASSWORD=alpha_password
-      - QUESTDB_HOST=questdb
-      - QUESTDB_ILP_PORT=9009
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     env_file:
       - .env
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
-      - alpha_secrets:/app/secrets
-    # ipc: host is required for ultra-low latency shared memory IPC later
+    # ipc: host is required for ultra-low latency shared memory IPC
     ipc: host
     depends_on:
       - redis
-      - postgres-db
-      - questdb
+      - data-feed
     deploy:
       resources:
         limits:
           cpus: '1.0'
-          memory: 512M
+          memory: 256M
 
   questdb:
     build:
@@ -132,6 +189,7 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Asia/Kolkata
+      - TEST_MODE=1  # Bypasses market-hours gate; remove in production
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
