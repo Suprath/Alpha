@@ -40,27 +40,24 @@ static alpha::models::OrderIntent momentum_strategy(
     bool liquid = (tick.ask_price > 0.0f && spread / tick.last_price < 0.005f);
 
     if (!liquid) {
-        intent.action = 0;
+        // qty=0 signals "no action" to SimRunner
         return intent;
     }
 
     if (tick.last_price > tick.vwap * 1.0005f) {
         // Price above VWAP — long signal
-        intent.action     = 1;
         intent.side       = 1;
         intent.qty        = 1;
         intent.reason     = 1;   // ENTRY
         intent.confidence = 0.6;
     } else if (tick.last_price < tick.vwap * 0.9995f) {
         // Price below VWAP — short/exit signal
-        intent.action     = -1;
         intent.side       = -1;
         intent.qty        = 1;
         intent.reason     = 2;   // EXIT
         intent.confidence = 0.6;
-    } else {
-        intent.action = 0;
     }
+    // else qty=0 → no action
 
     return intent;
 }

@@ -66,7 +66,6 @@ BacktestResult SimRunner::run(const models::BacktestTick* ticks, size_t count) {
         exit_intent.qty    = std::abs(open_qty_);
         exit_intent.side   = -open_side_;  // Close by reversing
         exit_intent.reason = 2;            // EXIT
-        exit_intent.action = -open_side_;
         execute_order(exit_intent, last);
     }
 
@@ -83,8 +82,8 @@ void SimRunner::process_batch(const models::BacktestTick* batch, size_t n) {
         // Evaluate strategy
         models::OrderIntent intent = strategy_(tick, clock_);
 
-        // Execute if action requested
-        if (intent.action != 0) {
+        // Execute if qty > 0 (qty=0 means "no action" from strategy)
+        if (intent.qty != 0 && intent.side != 0) {
             execute_order(intent, tick);
         }
 

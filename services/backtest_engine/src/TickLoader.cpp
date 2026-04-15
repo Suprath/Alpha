@@ -114,8 +114,8 @@ std::vector<models::BacktestTick> TickLoader::load_from_questdb(
         "  bid_price, ask_price, vwap "
         "FROM backtest_ticks "
         "WHERE instrument_token = " + txn.quote(static_cast<int64_t>(instrument_token)) +
-        "  AND timestamp >= to_timestamp(" + std::to_string(start_us) + ", 'x') "
-        "  AND timestamp <= to_timestamp(" + std::to_string(end_us) + ", 'x') "
+        "  AND timestamp >= cast(" + std::to_string(start_us) + " as timestamp) "
+        "  AND timestamp <= cast(" + std::to_string(end_us) + " as timestamp) "
         "ORDER BY timestamp";
 
     auto result = txn.exec(sql);

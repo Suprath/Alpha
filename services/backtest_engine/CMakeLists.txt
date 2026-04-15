@@ -40,6 +40,7 @@ target_compile_options(alpha-backtest PRIVATE
     -Wall
     -Wextra
     -Werror
+    -Wno-restrict   # Suppress false positive from libpqxx template instantiation
 )
 
 # ── Optional: link with jemalloc for better allocation performance ─────────
