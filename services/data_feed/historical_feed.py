@@ -1,18 +1,15 @@
 """
 Upstox v2 Historical Market Data Feed
 ─────────────────────────────────────────────────────────────────────────────
-1. Loads instrument universe from PostgreSQL (latest date)
-2. Fetches OHLCV candles from Upstox REST API with date chunking per interval
-3. Applies a sliding-window rate limiter (80 req/min) to stay under API limits
-4. Writes candles to QuestDB via ILP (Line Protocol) over TCP
-
-Interval → max days per request (≤ ~1900 bars, matching C++ backfill engine):
-  1minute  → 4 days     (375 bars/day × 4 = 1500)
-  5minute  → 24 days    ( 75 bars/day × 24 = 1800)
-  15minute → 75 days    ( 25 bars/day × 75 = 1875)
-  30minute → 150 days   ( 12 bars/day × 150 = 1800)
-  60minute → 300 days   (  6 bars/day × 300 = 1800)
-  day/week/month → no chunking (single call)
+1. Weekend skip   — Sat/Sun never touch the API (no need for a calendar)
+2. Holiday learn  — when Upstox returns empty candles for a weekday, that
+                    date is recorded in QuestDB's `nse_holidays` table and
+                    skipped on every future run (self-building calendar)
+3. Deduplication  — queries existing bar count before each chunk; only
+                    fetches data that is actually missing
+4. Graceful retry — per-chunk exponential back-off; 429 → 62 s cooldown;
+                    5xx → up to 3 retries; permanent 4xx → skip + continue
+5. Rate limit     — 66 req/min (safe: 66×30 = 1,980 < Upstox 2,000/30-min)
 """
 import asyncio
 import logging
@@ -32,36 +29,118 @@ UPSTOX_HISTORY_URL = (
     "https://api.upstox.com/v2/historical-candle"
     "/{instrument_key}/{interval}/{to_date}/{from_date}"
 )
-QUESTDB_HOST = os.getenv("QUESTDB_HOST", "questdb")
-QUESTDB_PORT = int(os.getenv("QUESTDB_ILP_PORT", "9009"))
-MAX_REQUESTS_PER_MIN = 66   # Upstox free tier: 500/min but 2000/30min window → safe cap is 66/min
+QUESTDB_HOST     = os.getenv("QUESTDB_HOST",       "questdb")
+QUESTDB_ILP_PORT = int(os.getenv("QUESTDB_ILP_PORT", "9009"))
+QUESTDB_PG_PORT  = 8812   # PostgreSQL wire — used for existence / holiday queries
+
+MAX_REQUESTS_PER_MIN = 66
+MAX_RETRIES          = 3
+RETRY_BASE_DELAY     = 2.0   # seconds; doubles each attempt
+EXISTENCE_TOLERANCE  = 0.90  # accept chunk if ≥90% of expected bars present
 
 
-# ── Rate limiter ──────────────────────────────────────────────────────────────
+# ── Expected bars per trading day ─────────────────────────────────────────────
+# NSE equity session: 09:15 – 15:30 = 375 minutes
+
+_BARS_PER_DAY: dict = {
+    "1minute":  375.0,
+    "5minute":   75.0,
+    "15minute":  25.0,
+    "30minute":  13.0,
+    "60minute":   7.0,
+    "1hour":      7.0,
+    "day":        1.0,
+    "week":       1.0,
+    "month":      1.0,
+}
+
+
+def _expected_bars(interval: str, n_trading_days: int) -> int:
+    bpd = _BARS_PER_DAY.get(interval, 375.0)
+    return max(1, int(bpd * n_trading_days * EXISTENCE_TOLERANCE))
+
+
+# ── Weekend / weekday helpers ──────────────────────────────────────────────────
+
+def _weekdays_in_range(from_str: str, to_str: str) -> list:
+    """Return all Mon–Fri dates in [from_str, to_str]. Ignores holidays."""
+    fmt    = "%Y-%m-%d"
+    cursor = datetime.strptime(from_str, fmt).date()
+    end    = datetime.strptime(to_str,   fmt).date()
+    days   = []
+    while cursor <= end:
+        if cursor.weekday() < 5:
+            days.append(cursor)
+        cursor += timedelta(days=1)
+    return days
+
+
+def _dates_from_candle_rows(rows: list) -> set:
+    """
+    Extract the unique calendar dates present in an Upstox candle response.
+    Each row's first element is an ISO-8601 string like "2024-03-15T09:15:00+05:30".
+    """
+    dates = set()
+    for row in rows:
+        try:
+            dates.add(datetime.strptime(row[0][:10], "%Y-%m-%d").date())
+        except Exception:
+            pass
+    return dates
+
+
+# ── NSE holiday persistence (QuestDB nse_holidays table) ──────────────────────
+
+def _load_known_holidays() -> set:
+    """
+    Read all previously discovered NSE holidays from QuestDB into memory.
+    Returns an empty set if the table doesn't exist yet (first run).
+    """
+    query = "SELECT DISTINCT timestamp FROM nse_holidays ORDER BY timestamp"
+    try:
+        conn = psycopg2.connect(
+            host=QUESTDB_HOST, port=QUESTDB_PG_PORT,
+            dbname="qdb", user="admin", password="quest",
+            connect_timeout=5,
+        )
+        cur = conn.cursor()
+        cur.execute(query)
+        holidays: set = set()
+        for (ts,) in cur.fetchall():
+            if hasattr(ts, "date"):
+                holidays.add(ts.date())
+            else:
+                # QuestDB may return microseconds as int
+                holidays.add(
+                    datetime.utcfromtimestamp(int(ts) / 1_000_000).date()
+                )
+        conn.close()
+        logger.info("[HistFeed] Loaded %d known NSE holidays from QuestDB", len(holidays))
+        return holidays
+    except Exception as exc:
+        logger.debug("[HistFeed] nse_holidays table not yet available: %s", exc)
+        return set()
+
+
+# ── Rate limiter ───────────────────────────────────────────────────────────────
 
 class SlidingWindowThrottler:
-    """
-    Rate limiter using a sliding window of request timestamps.
-    Never allows more than max_per_minute calls within any 60-second window.
-    """
+    """Never allows more than max_per_minute calls in any rolling 60-second window."""
 
-    def __init__(self, max_per_minute: int = 80) -> None:
-        self._max = max_per_minute
-        self._timestamps: deque[float] = deque()
+    def __init__(self, max_per_minute: int = MAX_REQUESTS_PER_MIN) -> None:
+        self._max        = max_per_minute
+        self._timestamps: deque = deque()
 
     async def acquire(self) -> None:
         now = time.monotonic()
-        # Evict timestamps older than 60 seconds
         while self._timestamps and now - self._timestamps[0] > 60.0:
             self._timestamps.popleft()
 
         if len(self._timestamps) >= self._max:
-            # Sleep until the oldest entry ages out of the window
-            wait = 60.0 - (now - self._timestamps[0]) + 0.05  # 50 ms safety buffer
+            wait = 60.0 - (now - self._timestamps[0]) + 0.05
             if wait > 0:
                 logger.info("[HistFeed] Rate limit hit — sleeping %.2fs", wait)
                 await asyncio.sleep(wait)
-            # Re-evict after sleep
             now = time.monotonic()
             while self._timestamps and now - self._timestamps[0] > 60.0:
                 self._timestamps.popleft()
@@ -69,10 +148,9 @@ class SlidingWindowThrottler:
         self._timestamps.append(time.monotonic())
 
 
-# ── Date-chunking helpers ─────────────────────────────────────────────────────
+# ── Date-chunking helpers ──────────────────────────────────────────────────────
 
 def _chunk_days_for_interval(interval: str) -> int:
-    """Max calendar days per API request for each intraday interval."""
     return {
         "1minute":  4,
         "5minute":  24,
@@ -80,12 +158,11 @@ def _chunk_days_for_interval(interval: str) -> int:
         "30minute": 150,
         "60minute": 300,
         "1hour":    300,
-    }.get(interval, 0)   # 0 → no chunking (day / week / month)
+    }.get(interval, 0)
 
 
 def _date_chunks(from_date: str, to_date: str, chunk_days: int):
-    """Yield (chunk_from, chunk_to) date-string pairs for the given range."""
-    fmt = "%Y-%m-%d"
+    fmt    = "%Y-%m-%d"
     d_from = datetime.strptime(from_date, fmt).date()
     d_to   = datetime.strptime(to_date,   fmt).date()
 
@@ -100,7 +177,40 @@ def _date_chunks(from_date: str, to_date: str, chunk_days: int):
         cursor = chunk_end + timedelta(days=1)
 
 
-# ── Main class ────────────────────────────────────────────────────────────────
+# ── QuestDB existence check ────────────────────────────────────────────────────
+
+def _count_existing_candles(symbol: str, interval: str,
+                             chunk_from: str, chunk_to: str) -> int:
+    """Count candles already in QuestDB for (symbol, interval) over the chunk range."""
+    exclusive_end = (
+        datetime.strptime(chunk_to, "%Y-%m-%d") + timedelta(days=1)
+    ).strftime("%Y-%m-%dT00:00:00Z")
+
+    query = (
+        f"SELECT COUNT(*) FROM candles "
+        f"WHERE symbol = '{symbol}' "
+        f"AND interval = '{interval}' "
+        f"AND timestamp >= '{chunk_from}T00:00:00Z' "
+        f"AND timestamp < '{exclusive_end}'"
+    )
+    try:
+        conn = psycopg2.connect(
+            host=QUESTDB_HOST, port=QUESTDB_PG_PORT,
+            dbname="qdb", user="admin", password="quest",
+            connect_timeout=5,
+        )
+        cur   = conn.cursor()
+        cur.execute(query)
+        count = cur.fetchone()[0] or 0
+        conn.close()
+        return int(count)
+    except Exception as exc:
+        logger.debug("[HistFeed] Existence check failed (%s %s→%s): %s",
+                     symbol, chunk_from, chunk_to, exc)
+        return 0
+
+
+# ── Main class ─────────────────────────────────────────────────────────────────
 
 class UpstoxHistoricalFeed:
     def __init__(
@@ -110,22 +220,25 @@ class UpstoxHistoricalFeed:
         from_date: str,
         to_date: Optional[str] = None,
     ) -> None:
-        self.access_token = access_token
-        self.interval     = interval
-        self.from_date    = from_date
-        self.to_date      = to_date or date.today().strftime("%Y-%m-%d")
-        self._throttler   = SlidingWindowThrottler(MAX_REQUESTS_PER_MIN)
+        self.access_token  = access_token
+        self.interval      = interval
+        self.from_date     = from_date
+        self.to_date       = to_date or date.today().strftime("%Y-%m-%d")
+        self._throttler    = SlidingWindowThrottler(MAX_REQUESTS_PER_MIN)
         self._qdb_sock: Optional[socket.socket] = None
 
-    # ── QuestDB ILP ───────────────────────────────────────────────────────────
+        # In-memory holiday set — seeded from QuestDB at startup
+        self._known_holidays: set = _load_known_holidays()
+
+    # ── QuestDB ILP write ──────────────────────────────────────────────────────
 
     def _connect_questdb(self) -> None:
         self._qdb_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._qdb_sock.connect((QUESTDB_HOST, QUESTDB_PORT))
-        logger.info("[HistFeed] QuestDB connected at %s:%d", QUESTDB_HOST, QUESTDB_PORT)
+        self._qdb_sock.connect((QUESTDB_HOST, QUESTDB_ILP_PORT))
+        logger.info("[HistFeed] QuestDB ILP connected at %s:%d",
+                    QUESTDB_HOST, QUESTDB_ILP_PORT)
 
     def _write_candle(self, candle: dict, symbol: str) -> None:
-        """Write one candle row to QuestDB via ILP line protocol."""
         ts_ns = candle["timestamp_ns"]
         line = (
             f"candles,symbol={symbol},interval={self.interval} "
@@ -139,11 +252,35 @@ class UpstoxHistoricalFeed:
         )
         self._qdb_sock.sendall(line.encode())
 
-    # ── PostgreSQL instrument lookup ──────────────────────────────────────────
+    def _record_new_holidays(self, discovered: list) -> None:
+        """
+        Persist newly discovered NSE holiday dates to QuestDB and update
+        the in-memory set. Only writes dates not already known.
+        Each date is stored as midnight UTC in the nse_holidays table.
+        """
+        new = [d for d in discovered if d not in self._known_holidays]
+        if not new:
+            return
+
+        for d in new:
+            ts_ns = int(
+                datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp() * 1e9
+            )
+            # ILP: nse_holidays table — confirmed=1 is a placeholder field;
+            # the designated timestamp column carries the holiday date.
+            line = f"nse_holidays confirmed=1i {ts_ns}\n"
+            self._qdb_sock.sendall(line.encode())
+            self._known_holidays.add(d)
+
+        logger.info(
+            "[HistFeed] Recorded %d new NSE holiday(s): %s",
+            len(new), [d.isoformat() for d in sorted(new)],
+        )
+
+    # ── Instrument lookup ──────────────────────────────────────────────────────
 
     @staticmethod
-    def _load_instruments() -> list[dict]:
-        """Return all rows from the latest date in instrument_universe."""
+    def _load_instruments() -> list:
         pg_host = os.getenv("POSTGRES_HOST", "postgres-db")
         pg_port = int(os.getenv("POSTGRES_PORT", "5432"))
         pg_db   = os.getenv("POSTGRES_DB",   "alpha_db")
@@ -166,7 +303,7 @@ class UpstoxHistoricalFeed:
         finally:
             conn.close()
 
-    # ── HTTP fetch ────────────────────────────────────────────────────────────
+    # ── HTTP fetch ─────────────────────────────────────────────────────────────
 
     async def _fetch_chunk(
         self,
@@ -175,7 +312,6 @@ class UpstoxHistoricalFeed:
         chunk_from: str,
         chunk_to: str,
     ) -> list:
-        """Fetch one date chunk from the Upstox historical-candle endpoint."""
         await self._throttler.acquire()
         url = UPSTOX_HISTORY_URL.format(
             instrument_key=instrument_key,
@@ -192,33 +328,91 @@ class UpstoxHistoricalFeed:
             url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
         ) as resp:
             body = await resp.json()
+            if resp.status == 429:
+                raise aiohttp.ClientResponseError(
+                    resp.request_info, resp.history,
+                    status=429, message="rate limited",
+                )
             if resp.status != 200:
-                raise RuntimeError(
-                    f"HTTP {resp.status} for {instrument_key} "
-                    f"[{chunk_from}→{chunk_to}]: {body}"
+                raise aiohttp.ClientResponseError(
+                    resp.request_info, resp.history,
+                    status=resp.status, message=str(body),
                 )
             if body.get("status") != "success":
-                raise RuntimeError(
-                    f"API non-success for {instrument_key}: {body}"
-                )
+                raise RuntimeError(f"API non-success: {body}")
             return body["data"]["candles"]
+
+    async def _fetch_with_retry(
+        self,
+        session: aiohttp.ClientSession,
+        instrument_key: str,
+        symbol: str,
+        chunk_from: str,
+        chunk_to: str,
+    ) -> list:
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                return await self._fetch_chunk(
+                    session, instrument_key, chunk_from, chunk_to
+                )
+
+            except aiohttp.ClientResponseError as exc:
+                if exc.status == 429:
+                    cooldown = 62.0
+                    logger.warning(
+                        "[HistFeed] %s %s→%s — 429 rate limited. "
+                        "Cooling down %.0fs (attempt %d/%d).",
+                        symbol, chunk_from, chunk_to, cooldown, attempt, MAX_RETRIES,
+                    )
+                    await asyncio.sleep(cooldown)
+                    continue
+
+                elif exc.status >= 500:
+                    if attempt == MAX_RETRIES:
+                        logger.error(
+                            "[HistFeed] %s %s→%s — HTTP %d after %d attempts. Skipping.",
+                            symbol, chunk_from, chunk_to, exc.status, MAX_RETRIES,
+                        )
+                        return []
+                    wait = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                    logger.warning(
+                        "[HistFeed] %s %s→%s — HTTP %d attempt %d/%d. Retry in %.1fs.",
+                        symbol, chunk_from, chunk_to, exc.status, attempt, MAX_RETRIES, wait,
+                    )
+                    await asyncio.sleep(wait)
+
+                else:
+                    logger.error(
+                        "[HistFeed] %s %s→%s — HTTP %d (permanent). Skipping.",
+                        symbol, chunk_from, chunk_to, exc.status,
+                    )
+                    return []
+
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                if attempt == MAX_RETRIES:
+                    logger.error(
+                        "[HistFeed] %s %s→%s — network error after %d attempts: %s. Skipping.",
+                        symbol, chunk_from, chunk_to, MAX_RETRIES, exc,
+                    )
+                    return []
+                wait = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.warning(
+                    "[HistFeed] %s %s→%s — network error attempt %d/%d, retry in %.1fs: %s",
+                    symbol, chunk_from, chunk_to, attempt, MAX_RETRIES, wait, exc,
+                )
+                await asyncio.sleep(wait)
+
+        return []
 
     @staticmethod
     def _parse_candle(row: list) -> dict:
-        """
-        Convert an Upstox candle row to a normalised dict with timestamp_ns.
-        Row format: [iso8601_ts, open, high, low, close, volume, oi?]
-        Timestamps are in IST (+05:30); we convert to UTC epoch nanoseconds.
-        """
         ts_str = row[0]
         try:
             dt_naive = datetime.strptime(ts_str[:19], "%Y-%m-%dT%H:%M:%S")
-            # Parse the timezone offset (e.g. "+05:30" or "+0530")
-            tz_part = ts_str[19:].strip()
+            tz_part  = ts_str[19:].strip()
             sign = 1
             if tz_part.startswith("-"):
-                sign = -1
-                tz_part = tz_part[1:]
+                sign, tz_part = -1, tz_part[1:]
             elif tz_part.startswith("+"):
                 tz_part = tz_part[1:]
             tz_digits = tz_part.replace(":", "").zfill(4)
@@ -239,45 +433,110 @@ class UpstoxHistoricalFeed:
             "open_interest": int(row[6]) if len(row) > 6 else 0,
         }
 
-    # ── Main run ──────────────────────────────────────────────────────────────
+    # ── Main run ───────────────────────────────────────────────────────────────
 
     async def run(self) -> None:
         self._connect_questdb()
 
         instruments = self._load_instruments()
         logger.info(
-            "[HistFeed] Loaded %d instruments; interval=%s from=%s to=%s",
+            "[HistFeed] %d instruments | interval=%s | %s → %s | "
+            "%d holidays already known",
             len(instruments), self.interval, self.from_date, self.to_date,
+            len(self._known_holidays),
         )
 
-        chunk_days   = _chunk_days_for_interval(self.interval)
-        total_candles = 0
+        chunk_days    = _chunk_days_for_interval(self.interval)
+        total_new     = 0
+        total_skipped = 0
 
         async with aiohttp.ClientSession() as session:
             for instr in instruments:
-                key    = instr["instrument_key"]
-                symbol = instr["trading_symbol"]
-                instr_total = 0
+                key        = instr["instrument_key"]
+                symbol     = instr["trading_symbol"]
+                instr_new  = 0
+                instr_skip = 0
 
                 for chunk_from, chunk_to in _date_chunks(
                     self.from_date, self.to_date, chunk_days
                 ):
-                    try:
-                        rows = await self._fetch_chunk(session, key, chunk_from, chunk_to)
-                        # Upstox returns newest-first; reverse to chronological order
-                        for row in reversed(rows):
-                            candle = self._parse_candle(row)
-                            self._write_candle(candle, symbol)
-                            instr_total += 1
-                    except Exception as exc:
-                        logger.warning(
-                            "[HistFeed] %s chunk %s→%s failed: %s",
-                            symbol, chunk_from, chunk_to, exc,
-                        )
+                    # ── 1. Skip pure-weekend chunks ───────────────────────────
+                    weekdays = _weekdays_in_range(chunk_from, chunk_to)
+                    if not weekdays:
+                        continue   # Sat/Sun only — no API call needed
 
-                total_candles += instr_total
-                logger.info("[HistFeed] %-20s  %d candles written", symbol, instr_total)
+                    # ── 2. Subtract known holidays ────────────────────────────
+                    expected_trading = [
+                        d for d in weekdays if d not in self._known_holidays
+                    ]
+
+                    if not expected_trading:
+                        logger.debug(
+                            "[HistFeed] %s %s→%s — all weekdays are known holidays. Skip.",
+                            symbol, chunk_from, chunk_to,
+                        )
+                        instr_skip += len(weekdays)
+                        continue
+
+                    # ── 3. Skip if sufficient candles already in QuestDB ──────
+                    existing = _count_existing_candles(
+                        symbol, self.interval, chunk_from, chunk_to
+                    )
+                    needed = _expected_bars(self.interval, len(expected_trading))
+
+                    if existing >= needed:
+                        logger.info(
+                            "[HistFeed] %s %s→%s — %d bars present "
+                            "(%d trading days, %d known holidays). Skip.",
+                            symbol, chunk_from, chunk_to, existing,
+                            len(expected_trading), len(weekdays) - len(expected_trading),
+                        )
+                        instr_skip += existing
+                        continue
+
+                    logger.info(
+                        "[HistFeed] %s %s→%s — %d/%d bars, %d trading days. Fetching...",
+                        symbol, chunk_from, chunk_to, existing, needed,
+                        len(expected_trading),
+                    )
+
+                    # ── 4. Fetch with retry ───────────────────────────────────
+                    rows = await self._fetch_with_retry(
+                        session, key, symbol, chunk_from, chunk_to
+                    )
+
+                    # ── 5. Discover and record holidays ───────────────────────
+                    # Any weekday that the API returned no candles for is a holiday.
+                    covered_dates = _dates_from_candle_rows(rows)
+                    new_holidays  = [
+                        d for d in weekdays
+                        if d not in covered_dates
+                        and d not in self._known_holidays
+                    ]
+                    if new_holidays:
+                        self._record_new_holidays(new_holidays)
+
+                    if not rows:
+                        continue   # all days in chunk were holidays
+
+                    # ── 6. Write candles to QuestDB ───────────────────────────
+                    for row in reversed(rows):   # Upstox returns newest-first
+                        candle = self._parse_candle(row)
+                        self._write_candle(candle, symbol)
+                        instr_new += 1
+
+                total_new     += instr_new
+                total_skipped += instr_skip
+                logger.info(
+                    "[HistFeed] %-20s  +%d new candles  %d skipped",
+                    symbol, instr_new, instr_skip,
+                )
 
         if self._qdb_sock:
             self._qdb_sock.close()
-        logger.info("[HistFeed] Done — %d total candles written to QuestDB", total_candles)
+
+        logger.info(
+            "[HistFeed] Done — %d new candles, %d skipped. "
+            "Total known holidays: %d",
+            total_new, total_skipped, len(self._known_holidays),
+        )
