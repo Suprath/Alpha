@@ -43,20 +43,29 @@ int main() {
         ? std::stod(capital_env)
         : alpha::market::PortfolioManager::DEFAULT_STARTING_CAPITAL;
 
+    // Redis config for portfolio publishing
+    const char* redis_host_env = std::getenv("REDIS_HOST");
+    const char* redis_port_env = std::getenv("REDIS_PORT");
+    const std::string redis_host = redis_host_env ? redis_host_env : "redis";
+    const int         redis_port = redis_port_env ? std::stoi(redis_port_env) : 6379;
+
     std::cout << "[Main] Starting capital: " << starting_capital << std::endl;
+    std::cout << "[Main] Redis publisher: " << redis_host << ":" << redis_port << std::endl;
 
     // -- SHM Reader: consumes OrderIntents from strategy engine --
     alpha::market::ShmReader reader("alpha_order_shm_v1", "order_queue");
     reader.wait_for_attachment();
 
     // -- Market Engine: paper trading + portfolio --
-    alpha::market::MarketEngine engine(starting_capital);
+    alpha::market::MarketEngine engine(starting_capital, redis_host, redis_port);
 
     std::cout << "[Main] Entering order processing loop..." << std::endl;
 
     alpha::models::OrderIntent intent{};
-    uint64_t last_portfolio_print_ns = alpha::time::Timestamp::now_ns();
-    constexpr uint64_t PORTFOLIO_PRINT_INTERVAL_NS = 300ULL * 1'000'000'000ULL; // 5 min
+    uint64_t last_portfolio_print_ns  = alpha::time::Timestamp::now_ns();
+    uint64_t last_redis_publish_ns    = last_portfolio_print_ns;
+    constexpr uint64_t PORTFOLIO_PRINT_INTERVAL_NS  = 300ULL * 1'000'000'000ULL; // 5 min
+    constexpr uint64_t REDIS_PUBLISH_INTERVAL_NS    =   5ULL * 1'000'000'000ULL; // 5 sec
 
     while (g_running.load(std::memory_order_relaxed)) {
         if (reader.poll(intent)) {
@@ -65,11 +74,18 @@ int main() {
             engine.update_price(intent.instrument_token, intent.price);
         }
 
-        // Periodic portfolio summary (every 5 minutes)
         uint64_t now = alpha::time::Timestamp::now_ns();
+
+        // Periodic portfolio summary to stdout (every 5 minutes)
         if (now - last_portfolio_print_ns >= PORTFOLIO_PRINT_INTERVAL_NS) {
             engine.print_portfolio();
             last_portfolio_print_ns = now;
+        }
+
+        // Periodic Redis publish (every 5 seconds — drives TUI portfolio panel)
+        if (now - last_redis_publish_ns >= REDIS_PUBLISH_INTERVAL_NS) {
+            engine.publish_portfolio_to_redis();
+            last_redis_publish_ns = now;
         }
 
         // EOD check: square off all intraday positions at 15:30 IST

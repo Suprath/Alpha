@@ -11,6 +11,11 @@ include_directories(../../shared/cpp/include)
 find_package(Boost REQUIRED)
 include_directories(${Boost_INCLUDE_DIRS})
 
+# hiredis — required by RedisPublisher
+find_path(HIREDIS_INCLUDE_DIR hiredis/hiredis.h)
+find_library(HIREDIS_LIB hiredis)
+include_directories(${HIREDIS_INCLUDE_DIR})
+
 # Main binary
 add_executable(alpha-market-engine
     src/main.cpp
@@ -18,6 +23,7 @@ add_executable(alpha-market-engine
     src/portfolio/PortfolioManager.cpp
     src/execution/ExecutionSimulator.cpp
     src/engine/MarketEngine.cpp
+    src/redis/RedisPublisher.cpp
 )
 
 target_include_directories(alpha-market-engine PRIVATE
@@ -33,6 +39,7 @@ target_include_directories(alpha-market-engine PRIVATE
 target_link_libraries(alpha-market-engine PRIVATE
     pthread
     rt
+    ${HIREDIS_LIB}
 )
 
 target_compile_options(alpha-market-engine PRIVATE

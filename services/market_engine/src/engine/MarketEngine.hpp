@@ -2,10 +2,12 @@
 
 #include <cstdint>
 #include <unordered_map>
+#include <string>
 #include <alpha/models/MarketModels.hpp>
 #include "../core/InstrumentInfo.hpp"
 #include "../portfolio/PortfolioManager.hpp"
 #include "../execution/ExecutionSimulator.hpp"
+#include "../redis/RedisPublisher.hpp"
 
 namespace alpha::market {
 
@@ -31,7 +33,8 @@ namespace alpha::market {
  */
 class MarketEngine {
 public:
-    explicit MarketEngine(double starting_capital = PortfolioManager::DEFAULT_STARTING_CAPITAL);
+    explicit MarketEngine(double starting_capital = PortfolioManager::DEFAULT_STARTING_CAPITAL,
+                          const std::string& redis_host = "redis", int redis_port = 6379);
 
     /**
      * @brief Process an incoming OrderIntent from the strategy engine.
@@ -55,11 +58,18 @@ public:
      */
     void print_portfolio() const { portfolio_.print_summary(); }
 
+    /**
+     * @brief Publish current portfolio snapshot to Redis.
+     * Called after every trade and periodically from the main loop.
+     */
+    void publish_portfolio_to_redis();
+
     const PortfolioManager& portfolio() const { return portfolio_; }
 
 private:
     PortfolioManager    portfolio_;
     InstrumentRegistry& registry_;
+    RedisPublisher      redis_publisher_;
     uint64_t            trade_id_counter_{0};
 
     // Last known price per instrument (for MTM and EOD square-off)

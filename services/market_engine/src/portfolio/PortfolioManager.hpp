@@ -63,6 +63,9 @@ public:
     double available_cash()  const { return cash_; }
     double margin_used()     const { return margin_used_; }
 
+    /** Read-only access to all positions (for Redis publishing). */
+    const std::unordered_map<uint32_t, Position>& positions() const { return positions_; }
+
     /**
      * @brief EOD reset: realize all intraday positions at last price, clear margin.
      * Call this at 15:30 IST for intraday positions.

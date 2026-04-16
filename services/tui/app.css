@@ -1,0 +1,199 @@
+/* ═══════════════════════════════════════════════════════════════
+   Alpha Terminal UI — Textual CSS
+   Dark trading-terminal aesthetic (GitHub dark palette)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Screen ───────────────────────────────────────────────────── */
+Screen {
+    background: #0d1117;
+    layout: vertical;
+}
+
+/* ── Top row: Services | Prices | Portfolio ───────────────────── */
+#top-row {
+    height: 15;
+    layout: horizontal;
+    border-bottom: tall #21262d;
+}
+
+ServicesPanel {
+    width: 3fr;
+    border-right: tall #21262d;
+    background: #0d1117;
+    padding: 0 1;
+}
+
+PricesPanel {
+    width: 4fr;
+    border-right: tall #21262d;
+    background: #0d1117;
+    padding: 0 1;
+}
+
+PortfolioPanel {
+    width: 3fr;
+    background: #0d1117;
+    padding: 0 1;
+}
+
+/* ── Mid row: Signals | Trades ────────────────────────────────── */
+#mid-row {
+    height: 11;
+    layout: horizontal;
+    border-bottom: tall #21262d;
+}
+
+SignalsPanel {
+    width: 1fr;
+    border-right: tall #21262d;
+    background: #0d1117;
+    padding: 0 1;
+}
+
+TradesPanel {
+    width: 1fr;
+    background: #0d1117;
+    padding: 0 1;
+}
+
+/* ── Log panel ────────────────────────────────────────────────── */
+LogPanel {
+    height: 1fr;
+    background: #0d1117;
+    padding: 0 1;
+}
+
+#log-view {
+    height: 1fr;
+    background: #0d1117;
+    scrollbar-color: #30363d #0d1117;
+}
+
+/* ── Footer ───────────────────────────────────────────────────── */
+Footer {
+    background: #161b22;
+    color: #8b949e;
+}
+
+Footer > .footer--key {
+    background: #21262d;
+    color: #58a6ff;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Modals
+   ═══════════════════════════════════════════════════════════════ */
+
+ModalScreen {
+    align: center middle;
+    background: rgba(13, 17, 23, 0.85);
+}
+
+#modal-dialog {
+    background: #161b22;
+    border: thick #30363d;
+    padding: 1 2;
+    width: 64;
+    height: auto;
+    max-height: 36;
+}
+
+#modal-title {
+    color: #58a6ff;
+    text-style: bold;
+    padding-bottom: 1;
+    border-bottom: solid #21262d;
+    margin-bottom: 1;
+    width: 100%;
+}
+
+.modal-label {
+    color: #8b949e;
+    margin-top: 1;
+}
+
+.modal-input {
+    background: #0d1117;
+    border: solid #30363d;
+    color: #e6edf3;
+    margin-top: 0;
+    width: 100%;
+}
+
+.modal-input:focus {
+    border: solid #58a6ff;
+}
+
+.modal-select {
+    background: #0d1117;
+    border: solid #30363d;
+    color: #e6edf3;
+    width: 100%;
+}
+
+#modal-buttons {
+    layout: horizontal;
+    margin-top: 1;
+    height: 3;
+    align: right middle;
+    padding-top: 1;
+    border-top: solid #21262d;
+}
+
+Button {
+    margin-left: 1;
+    border: none;
+    min-width: 10;
+}
+
+Button.primary {
+    background: #238636;
+    color: #ffffff;
+}
+
+Button.primary:hover {
+    background: #2ea043;
+}
+
+Button.danger {
+    background: #da3633;
+    color: #ffffff;
+}
+
+Button.danger:hover {
+    background: #f85149;
+}
+
+Button.secondary {
+    background: #21262d;
+    color: #e6edf3;
+}
+
+Button.secondary:hover {
+    background: #30363d;
+}
+
+/* ── Confirm modal ────────────────────────────────────────────── */
+#confirm-dialog {
+    background: #161b22;
+    border: thick #da3633;
+    padding: 1 2;
+    width: 50;
+    height: auto;
+}
+
+#confirm-message {
+    color: #e6edf3;
+    margin-bottom: 1;
+}
+
+/* ── Result/output panel inside modals ───────────────────────────*/
+#modal-output {
+    background: #0d1117;
+    border: solid #21262d;
+    height: 12;
+    margin-top: 1;
+    padding: 0 1;
+    color: #e6edf3;
+    overflow-y: auto;
+}

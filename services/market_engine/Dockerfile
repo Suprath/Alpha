@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     libboost-system-dev \
     libboost-dev \
+    libhiredis-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -24,6 +25,7 @@ FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y \
     libboost-system1.81.0 \
+    libhiredis0.14 \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 

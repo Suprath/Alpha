@@ -303,6 +303,36 @@ services:
           cpus: '4.0'    # Maximize CPU for hot-loop
           memory: 4G     # Large page cache for mmap
 
+  # ── Terminal UI — interactive operator dashboard ────────────────────────────
+  tui:
+    build:
+      context: .
+      dockerfile: services/tui/Dockerfile
+    image: alpha-tui:latest
+    container_name: alpha-tui
+    restart: "no"
+    stdin_open: true   # Required for interactive TUI
+    tty: true          # Allocate pseudo-TTY
+    environment:
+      - TZ=Asia/Kolkata
+      - TERM=xterm-256color
+      - COLORTERM=truecolor
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres-db
+      - QUESTDB_HOST=questdb
+      - DOCKER_NETWORK=alpha_default
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker API access
+    depends_on:
+      - redis
+      - postgres-db
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
 volumes:
   redis_data:
   alpha_secrets:
