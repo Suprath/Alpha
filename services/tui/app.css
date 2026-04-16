@@ -56,6 +56,63 @@ TradesPanel {
     padding: 0 1;
 }
 
+/* ── Mode view containers ─────────────────────────────────────── */
+#live-view {
+    layout: vertical;
+    height: auto;
+}
+
+#research-view {
+    layout: vertical;
+    height: auto;
+}
+
+/* ── Research top row: BacktestStatus | BacktestResults ───────── */
+#res-top-row {
+    height: 18;
+    layout: horizontal;
+    border-bottom: tall #21262d;
+}
+
+BacktestStatusPanel {
+    width: 3fr;
+    border-right: tall #21262d;
+    background: #0d1117;
+    padding: 0 1;
+}
+
+BacktestResultsPanel {
+    width: 7fr;
+    background: #0d1117;
+    padding: 0 1;
+}
+
+#bt-results-log {
+    height: 1fr;
+    background: #0d1117;
+    scrollbar-color: #30363d #0d1117;
+}
+
+/* ── Research mid row: BackfillStatus | InstrumentPanel ────────── */
+#res-mid-row {
+    height: 10;
+    layout: horizontal;
+    border-bottom: tall #21262d;
+}
+
+BackfillStatusPanel {
+    width: 3fr;
+    border-right: tall #21262d;
+    background: #0d1117;
+    padding: 0 1;
+}
+
+InstrumentPanel {
+    width: 7fr;
+    background: #0d1117;
+    padding: 0 1;
+}
+
 /* ── Log panel ────────────────────────────────────────────────── */
 LogPanel {
     height: 1fr;

@@ -27,6 +27,7 @@ from commands import (
     get_raw_ticks,
     get_stream_lengths,
     get_container_logs,
+    list_alpha_files,
 )
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
@@ -400,12 +401,14 @@ class TradesPanel(Widget):
 # ── Log Panel ──────────────────────────────────────────────────────────────────
 
 _LOG_SOURCES = [
-    ("tick-feed",      None),
-    ("market-engine",  "alpha-market-engine"),
-    ("signal-engine",  "alpha-signal-engine"),
-    ("strategy-engine","alpha-strategy-engine"),
-    ("ingester",       "alpha-ingester"),
-    ("data-feed",      "alpha-data-feed"),
+    ("tick-feed",       None),
+    ("market-engine",   "alpha-market-engine"),
+    ("signal-engine",   "alpha-signal-engine"),
+    ("strategy-engine", "alpha-strategy-engine"),
+    ("ingester",        "alpha-ingester"),
+    ("data-feed",       "alpha-data-feed"),
+    ("backtest-run",    "alpha-backtest-tui"),
+    ("backfill-run",    "alpha-data-feed-historical-tui"),
 ]
 
 _SYM_COLORS = {
@@ -441,6 +444,23 @@ class LogPanel(Widget):
         if _LOG_SOURCES[self._source_idx][0] == "tick-feed":
             self._last_tick_id = "0-0"
             self._tick_prev    = {}
+        self._trigger_refresh()
+
+    def set_backtest_source(self) -> None:
+        """Switch log panel to backtest container output (called on Research mode entry)."""
+        for i, (name, _) in enumerate(_LOG_SOURCES):
+            if name == "backtest-run":
+                self._source_idx = i
+                break
+        self.query_one("#log-view", RichLog).clear()
+        self._trigger_refresh()
+
+    def set_live_source(self) -> None:
+        """Switch log panel back to tick-feed (called on Live mode entry)."""
+        self._source_idx   = 0
+        self._last_tick_id = "0-0"
+        self._tick_prev    = {}
+        self.query_one("#log-view", RichLog).clear()
         self._trigger_refresh()
 
     def _trigger_refresh(self) -> None:
@@ -555,3 +575,210 @@ class LogPanel(Widget):
                 log_w.write(f"[{Y}]{line}[/]")
             else:
                 log_w.write(f"[{GR}]{line}[/]")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RESEARCH MODE PANELS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Backtest Status Panel ──────────────────────────────────────────────────────
+
+_BACKTEST_CONTAINERS = [
+    ("backtest-eng",  "alpha-backtest-engine"),
+    ("bt-run",        "alpha-backtest-tui"),
+    ("backfill-eng",  "alpha-backfill-engine"),
+    ("bf-run",        "alpha-data-feed-historical-tui"),
+]
+
+
+class BacktestStatusPanel(Widget):
+    """Research mode: backtest/backfill container health + action hints. Refreshes every 3s."""
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="bt-status-content")
+
+    def on_mount(self) -> None:
+        self.set_interval(3.0, self._trigger_refresh)
+        self._trigger_refresh()
+
+    def _trigger_refresh(self) -> None:
+        self._fetch()
+
+    @work(thread=True, exclusive=True)
+    def _fetch(self) -> None:
+        statuses = get_container_statuses()
+        self.app.call_from_thread(self._render, statuses)
+
+    def _render(self, statuses: dict) -> None:
+        lines = [hdr("RESEARCH")]
+
+        for dname, cname in _BACKTEST_CONTAINERS:
+            info   = statuses.get(cname, {"status": "absent"})
+            status = info.get("status", "absent")
+            uptime = info.get("uptime", "")
+
+            if status == "running":
+                dot, scol, s = f"[{G}]●[/]", G, f"RUNNING {uptime}"
+            elif status == "exited":
+                dot, scol, s = f"[{GR}]✗[/]", GR, "DONE"
+            elif status == "absent":
+                dot, scol, s = f"[{DIM}]○[/]", DIM, "ABSENT"
+            else:
+                dot, scol, s = f"[{Y}]↻[/]", Y, status.upper()
+
+            lines.append(f" {dot} [{scol}]{dname:<14}[/][{GR}]{s}[/]")
+
+        lines.append("")
+        lines.append(f"[{DIM}]{'─'*30}[/]")
+        lines.append(f" [{GR}]B  →  backfill (date range)[/]")
+        lines.append(f" [{GR}]X  →  backtest (capital, bps)[/]")
+        lines.append(f" [{GR}]L  →  cycle log source[/]")
+        lines.append(f" [{GR}]M  →  back to Live mode[/]")
+
+        self.query_one("#bt-status-content", Static).update("\n".join(lines))
+
+
+# ── Backtest Results Panel ─────────────────────────────────────────────────────
+
+class BacktestResultsPanel(Widget):
+    """Research mode: live stream of alpha-backtest-tui container output. Refreshes every 2s."""
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="bt-results-header")
+        yield RichLog(id="bt-results-log", highlight=True, markup=True, wrap=False)
+
+    def on_mount(self) -> None:
+        self.set_interval(2.0, self._trigger_refresh)
+        self._trigger_refresh()
+
+    def _trigger_refresh(self) -> None:
+        self._fetch()
+
+    @work(thread=True, exclusive=True)
+    def _fetch(self) -> None:
+        bt_logs = get_container_logs("alpha-backtest-tui", tail=80)
+        bf_logs = get_container_logs("alpha-data-feed-historical-tui", tail=10)
+        self.app.call_from_thread(self._render, bt_logs, bf_logs)
+
+    def _render(self, bt_logs: str, bf_logs: str) -> None:
+        self.query_one("#bt-results-header", Static).update(
+            hdr("BACKTEST OUTPUT", f"[{GR}]alpha-backtest-tui · 2s[/]")
+        )
+        log_w = self.query_one("#bt-results-log", RichLog)
+        log_w.clear()
+
+        # Show recent backfill progress at the top if available
+        if bf_logs.strip() and not bf_logs.startswith("[error"):
+            log_w.write(f"[{DIM}]── backfill ──────────────────────────[/]")
+            for line in bf_logs.strip().splitlines()[-4:]:
+                log_w.write(f"[{GR}]{line}[/]")
+
+        if not bt_logs.strip() or bt_logs.startswith("[error"):
+            log_w.write(f"[{GR}]No backtest output yet — press X to run.[/]")
+            return
+
+        log_w.write(f"[{DIM}]── backtest ─────────────────────────[/]")
+        for line in bt_logs.strip().splitlines():
+            u = line.upper()
+            if any(k in u for k in ("RESULT", "FINAL", "NET P", "WIN RATE", "SHARPE", "DRAWDOWN")):
+                log_w.write(f"[bold {G}]{line}[/]")
+            elif any(k in u for k in ("ERROR", "FAILED", "PANIC")):
+                log_w.write(f"[{R}]{line}[/]")
+            elif any(k in u for k in ("LOADED", "RUNNING", "EXPORT", "FOUND")):
+                log_w.write(f"[{B}]{line}[/]")
+            elif "TRADE" in u:
+                log_w.write(f"[{Y}]{line}[/]")
+            else:
+                log_w.write(f"[{GR}]{line}[/]")
+
+
+# ── Backfill Status Panel ──────────────────────────────────────────────────────
+
+class BackfillStatusPanel(Widget):
+    """Research mode: backfill container tail + tracked instruments. Refreshes every 5s."""
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="bf-status-content")
+
+    def on_mount(self) -> None:
+        self.set_interval(5.0, self._trigger_refresh)
+        self._trigger_refresh()
+
+    def _trigger_refresh(self) -> None:
+        self._fetch()
+
+    @work(thread=True, exclusive=True)
+    def _fetch(self) -> None:
+        logs = get_container_logs("alpha-data-feed-historical-tui", tail=20)
+        self.app.call_from_thread(self._render, logs)
+
+    def _render(self, logs: str) -> None:
+        lines = [hdr("BACKFILL")]
+
+        if logs.strip() and not logs.startswith("[error"):
+            for line in logs.strip().splitlines()[-5:]:
+                col   = G if any(k in line.lower() for k in ("done", "success", "written")) else GR
+                short = line.strip()[-68:] if len(line) > 68 else line.strip()
+                lines.append(f"  [{col}]{short}[/]")
+        else:
+            lines.append(f"  [{GR}]No backfill output.[/]")
+            lines.append(f"  [{GR}]Press B to run.[/]")
+
+        lines.append("")
+        lines.append(f"[{DIM}]{'─'*28}[/]")
+        lines.append(f" [{GR}]Tracked ({len(TOKEN_SYMBOLS)}):[/]")
+        for tok, sym in TOKEN_SYMBOLS.items():
+            lines.append(f"  [{C}]{sym:<12}[/][{GR}]{tok}[/]")
+
+        self.query_one("#bf-status-content", Static).update("\n".join(lines))
+
+
+# ── Instrument Panel ───────────────────────────────────────────────────────────
+
+class InstrumentPanel(Widget):
+    """Research mode: instruments vs .alpha file readiness. Refreshes every 10s."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._alpha_files: list[str] = []
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="instr-content")
+
+    def on_mount(self) -> None:
+        self.set_interval(10.0, self._trigger_refresh)
+        self._trigger_refresh()
+
+    def _trigger_refresh(self) -> None:
+        self._fetch()
+
+    @work(thread=True, exclusive=True)
+    def _fetch(self) -> None:
+        files = list_alpha_files()
+        self.app.call_from_thread(self._render, files)
+
+    def _render(self, files: list[str]) -> None:
+        self._alpha_files = files
+        ready_tokens = {f.split(".")[0] for f in files if f.split(".")[0].isdigit()}
+        n_ready = len(ready_tokens)
+
+        lines = [hdr("INSTRUMENTS", f"[{GR}].alpha ready: {n_ready}/{len(TOKEN_SYMBOLS)}[/]")]
+        lines.append(f" [{GR}]{'SYM':<12}{'TOKEN':<10}{'BINARY FILE':>14}[/]")
+        lines.append(f" [{DIM}]{'─'*36}[/]")
+
+        for tok, sym in TOKEN_SYMBOLS.items():
+            if tok in ready_tokens:
+                status = f"[{G}]✓  {tok}.alpha[/]"
+            else:
+                status = f"[{GR}]─  not exported[/]"
+            lines.append(f" [{C}]{sym:<12}[/][{GR}]{tok:<10}[/]{status}")
+
+        lines.append("")
+        if n_ready == 0:
+            lines.append(f"  [{Y}]Run backfill → then 'backtest export' → then X[/]")
+        elif n_ready < len(TOKEN_SYMBOLS):
+            lines.append(f"  [{Y}]{len(TOKEN_SYMBOLS) - n_ready} instrument(s) missing .alpha export[/]")
+        else:
+            lines.append(f"  [{G}]All instruments ready — press X to backtest[/]")
+
+        self.query_one("#instr-content", Static).update("\n".join(lines))

@@ -3,14 +3,27 @@ Alpha Terminal UI — main entry point.
 
 Dense single-screen trading dashboard built with Textual.
 
-Layout (top→bottom):
-  ┌─ Header: title / IST time / market status ──────────────────────────────┐
+Modes
+-----
+  LIVE      Real-time trading dashboard (default)
+  RESEARCH  Backtest / backfill research workspace
+
+Live layout (top→bottom):
+  ┌─ Header: title / IST time / market status / mode ──────────────────────┐
   ├─ Top row (height 15):  ServicesPanel | PricesPanel | PortfolioPanel     │
   ├─ Mid row (height 11):  SignalsPanel  | TradesPanel                      │
-  ├─ Log panel (1fr):      Tailable Docker log viewer                       │
-  └─ Footer: hotkey bar ────────────────────────────────────────────────────┘
+  ├─ Log panel (1fr):      Tick stream / Docker log viewer                  │
+  └─ Footer ──────────────────────────────────────────────────────────────  ┘
+
+Research layout (top→bottom):
+  ┌─ Header ────────────────────────────────────────────────────────────────┐
+  ├─ Top row (height 18):  BacktestStatusPanel | BacktestResultsPanel       │
+  ├─ Mid row (height 10):  BackfillStatusPanel | InstrumentPanel            │
+  ├─ Log panel (1fr):      Defaults to backtest-run container logs          │
+  └─ Footer ──────────────────────────────────────────────────────────────  ┘
 
 Keybindings:
+  M   Toggle Live / Research mode
   F5  Start all engine containers
   F6  Stop all engine containers
   R   Restart service (opens ServiceModal)
@@ -32,7 +45,12 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Static
 from textual import on
 
-from panels import ServicesPanel, PricesPanel, PortfolioPanel, SignalsPanel, TradesPanel, LogPanel
+from panels import (
+    ServicesPanel, PricesPanel, PortfolioPanel,
+    SignalsPanel, TradesPanel, LogPanel,
+    BacktestStatusPanel, BacktestResultsPanel,
+    BackfillStatusPanel, InstrumentPanel,
+)
 from modals import ConfirmModal, ServiceModal, TestTickModal, BackfillModal, BacktestModal
 from commands import stop_container, start_all_engines, stop_all_engines
 
@@ -47,6 +65,7 @@ B   = "#58a6ff"
 Y   = "#d29922"
 GR  = "#8b949e"
 W   = "#e6edf3"
+P   = "#bc8cff"   # purple — used for Research mode indicator
 
 
 def _ist_now() -> datetime:
@@ -75,36 +94,49 @@ def _market_status() -> tuple[str, str]:
 
 
 class AlphaTUI(App):
-    """Alpha Terminal — data-saturated trading dashboard."""
+    """Alpha Terminal — Live trading dashboard and Research workspace."""
 
     TITLE   = "α ALPHA TERMINAL"
     CSS_PATH = "app.css"
 
     BINDINGS = [
-        ("f5",     "start_all",    "Start All"),
-        ("f6",     "stop_engines", "Stop Engines"),
-        ("r",      "restart",      "Restart Svc"),
-        ("t",      "test_tick",    "Test Tick"),
-        ("b",      "backfill",     "Backfill"),
-        ("x",      "backtest",     "Backtest"),
-        ("e",      "eod",          "EOD Square-off"),
-        ("l",      "cycle_log",    "Cycle Log"),
-        ("q",      "quit",         "Quit"),
+        ("m",      "toggle_mode",   "Mode"),
+        ("f5",     "start_all",     "Start All"),
+        ("f6",     "stop_engines",  "Stop Engines"),
+        ("r",      "restart",       "Restart Svc"),
+        ("t",      "test_tick",     "Test Tick"),
+        ("b",      "backfill",      "Backfill"),
+        ("x",      "backtest",      "Backtest"),
+        ("e",      "eod",           "EOD Square-off"),
+        ("l",      "cycle_log",     "Cycle Log"),
+        ("q",      "quit",          "Quit"),
     ]
+
+    _mode: str = "live"   # "live" | "research"
 
     # ── Layout ─────────────────────────────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
         yield Static("", id="tui-header")
 
-        with Horizontal(id="top-row"):
-            yield ServicesPanel()
-            yield PricesPanel()
-            yield PortfolioPanel()
+        # ── Live mode layout ───────────────────────────────────────────────────
+        with Vertical(id="live-view"):
+            with Horizontal(id="top-row"):
+                yield ServicesPanel()
+                yield PricesPanel()
+                yield PortfolioPanel()
+            with Horizontal(id="mid-row"):
+                yield SignalsPanel()
+                yield TradesPanel()
 
-        with Horizontal(id="mid-row"):
-            yield SignalsPanel()
-            yield TradesPanel()
+        # ── Research mode layout (hidden on start) ─────────────────────────────
+        with Vertical(id="research-view"):
+            with Horizontal(id="res-top-row"):
+                yield BacktestStatusPanel()
+                yield BacktestResultsPanel()
+            with Horizontal(id="res-mid-row"):
+                yield BackfillStatusPanel()
+                yield InstrumentPanel()
 
         yield LogPanel()
         yield Footer()
@@ -112,6 +144,8 @@ class AlphaTUI(App):
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     def on_mount(self) -> None:
+        # Research view hidden by default
+        self.query_one("#research-view").display = False
         self._tick_header()
         self.set_interval(1.0, self._tick_header)
 
@@ -122,17 +156,44 @@ class AlphaTUI(App):
         status, scol = _market_status()
         date_s = now.strftime("%a %d %b %Y")
 
+        if self._mode == "live":
+            mode_s = f"[bold {G}] LIVE [/]"
+        else:
+            mode_s = f"[bold {P}] RESEARCH [/]"
+
         try:
             self.query_one("#tui-header", Static).update(
                 f"[bold {B}]  α  ALPHA TERMINAL[/]"
-                f"    [{GR}]{date_s}[/]"
-                f"    [{W}]{time_s}[/]"
-                f"    MARKET: [{scol}]{status}[/]"
+                f"  {mode_s}"
+                f"  [{GR}]{date_s}[/]"
+                f"  [{W}]{time_s}[/]"
+                f"  MARKET: [{scol}]{status}[/]"
+                f"  [{GR}](M=toggle mode)[/]"
             )
         except NoMatches:
             pass  # Modal screen is active; header lives on the background screen
 
     # ── Action handlers ────────────────────────────────────────────────────────
+
+    def action_toggle_mode(self) -> None:
+        """M — switch between Live and Research mode."""
+        self._mode = "research" if self._mode == "live" else "live"
+
+        self.query_one("#live-view").display     = (self._mode == "live")
+        self.query_one("#research-view").display = (self._mode == "research")
+
+        log = self.query_one(LogPanel)
+        if self._mode == "research":
+            log.set_backtest_source()
+        else:
+            log.set_live_source()
+
+        self._tick_header()
+        self.notify(
+            f"Switched to {'Live trading dashboard' if self._mode == 'live' else 'Research / backtest workspace'}",
+            title=f"Mode: {self._mode.upper()}",
+            severity="information",
+        )
 
     async def action_start_all(self) -> None:
         """F5 — start all engine containers."""

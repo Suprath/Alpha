@@ -276,15 +276,16 @@ def run_historical_backfill(
                 "BACKFILL_FROM_DATE": from_date,
                 "BACKFILL_TO_DATE":   to_date,
                 "BACKFILL_INTERVAL":  interval,
-                "REDIS_HOST":         REDIS_HOST,
-                "REDIS_PORT":         str(REDIS_PORT),
-                "POSTGRES_HOST":      POSTGRES_HOST,
-                "POSTGRES_PORT":      "5432",
-                "POSTGRES_DB":        "alpha_db",
-                "POSTGRES_USER":      "alpha_user",
-                "POSTGRES_PASSWORD":  "alpha_password",
-                "QUESTDB_HOST":       QUESTDB_HOST,
-                "QUESTDB_ILP_PORT":   "9009",
+                "UPSTOX_ACCESS_TOKEN": os.getenv("UPSTOX_ACCESS_TOKEN", ""),
+                "REDIS_HOST":          REDIS_HOST,
+                "REDIS_PORT":          str(REDIS_PORT),
+                "POSTGRES_HOST":       POSTGRES_HOST,
+                "POSTGRES_PORT":       "5432",
+                "POSTGRES_DB":         "alpha_db",
+                "POSTGRES_USER":       "alpha_user",
+                "POSTGRES_PASSWORD":   "alpha_password",
+                "QUESTDB_HOST":        QUESTDB_HOST,
+                "QUESTDB_ILP_PORT":    "9009",
             },
             network=DOCKER_NETWORK,
             name="alpha-data-feed-historical-tui",
@@ -294,6 +295,28 @@ def run_historical_backfill(
         return c.short_id
     except Exception as e:
         return f"ERROR: {e}"
+
+
+def list_alpha_files() -> list[str]:
+    """List .alpha files in the alpha_backtest_data Docker volume.
+    Runs a one-off alpine container — result cached by caller.
+    Returns list of filenames (e.g. ['105712.alpha', ...]).
+    """
+    try:
+        client = _docker()
+        output = client.containers.run(
+            "alpine:latest",
+            command="ls /data/backtest/ 2>/dev/null || true",
+            volumes={"alpha_backtest_data": {"bind": "/data/backtest", "mode": "ro"}},
+            network_mode="none",
+            remove=True,
+        )
+        if not output:
+            return []
+        lines = output.decode().strip().splitlines()
+        return [l.strip() for l in lines if l.strip().endswith(".alpha")]
+    except Exception:
+        return []
 
 
 def run_backtest(

@@ -34,7 +34,7 @@ UPSTOX_HISTORY_URL = (
 )
 QUESTDB_HOST = os.getenv("QUESTDB_HOST", "questdb")
 QUESTDB_PORT = int(os.getenv("QUESTDB_ILP_PORT", "9009"))
-MAX_REQUESTS_PER_MIN = 80
+MAX_REQUESTS_PER_MIN = 66   # Upstox free tier: 500/min but 2000/30min window → safe cap is 66/min
 
 
 # ── Rate limiter ──────────────────────────────────────────────────────────────

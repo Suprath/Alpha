@@ -322,6 +322,8 @@ services:
       - POSTGRES_HOST=postgres-db
       - QUESTDB_HOST=questdb
       - DOCKER_NETWORK=alpha_default
+    env_file:
+      - .env            # Provides UPSTOX_ACCESS_TOKEN for backfill forwarding
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # Docker API access
     depends_on:
