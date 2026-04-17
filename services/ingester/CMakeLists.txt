@@ -56,7 +56,6 @@ target_compile_options(alpha-ingester PRIVATE
 )
 
 # ── Unit tests ────────────────────────────────────────────────────────────────
-# Tests cover shared infrastructure (RingBuffer, MarketModels, RateLimiter).
 enable_testing()
 find_package(GTest REQUIRED)
 
@@ -64,12 +63,22 @@ add_executable(alpha-ingester-test
     ../../tests/unit/ingester_normalization_test.cpp
     ../../tests/unit/rate_limiter_test.cpp
     ../../tests/unit/ipc_ringbuffer_test.cpp
+    ../../tests/unit/proto_tick_mapper_test.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/alpha_tick.pb.cc"
+)
+
+target_include_directories(alpha-ingester-test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src       # ProtoMapper.hpp
+    ${CMAKE_CURRENT_BINARY_DIR}           # alpha_tick.pb.h
+    ../../shared/cpp/include
+    ${Protobuf_INCLUDE_DIRS}
 )
 
 target_link_libraries(alpha-ingester-test
     GTest::gtest_main
     Threads::Threads
     Boost::system
+    ${Protobuf_LIBRARIES}
 )
 
 add_test(NAME IngesterUnitTests COMMAND alpha-ingester-test)

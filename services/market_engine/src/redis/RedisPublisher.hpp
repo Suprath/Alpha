@@ -10,9 +10,10 @@ namespace alpha::market {
 /**
  * RedisPublisher — fire-and-forget Redis sink for portfolio + trade events.
  *
- * Publishes to two keys:
- *   HSET alpha:portfolio    — live snapshot (cash, equity, P&L, positions)
- *   XADD alpha:trades       — append-only trade blotter stream
+ * Transport: protobuf binary (alpha_portfolio.proto)
+ *
+ *   HSET alpha:portfolio data <serialized PortfolioSnapshot bytes>
+ *   XADD alpha:trades MAXLEN ~ 500 * data <serialized Trade bytes>
  *
  * Non-blocking: any Redis failure silently logs to stderr and is skipped.
  * The market engine main loop is never stalled.
@@ -32,16 +33,16 @@ public:
     bool is_connected() const { return ctx_ && ctx_->err == 0; }
 
     /**
-     * Publish a full portfolio snapshot to HSET alpha:portfolio.
-     * Also serializes open positions into pos_tokens + pos_<token> fields.
+     * Publish a full portfolio snapshot to HSET alpha:portfolio (field "data").
+     * Serialized as a binary PortfolioSnapshot proto message.
      */
     struct PositionSnapshot {
-        uint32_t token;
+        uint32_t    token;
         const char* symbol;
-        int32_t  qty;
-        double   avg_cost;
-        double   realized_pnl;
-        double   unrealized_pnl;
+        int32_t     qty;
+        double      avg_cost;
+        double      realized_pnl;
+        double      unrealized_pnl;
     };
 
     void publish_portfolio(
@@ -57,17 +58,18 @@ public:
 
     /**
      * Append a fill to the XADD alpha:trades stream (maxlen=500).
+     * Serialized as a binary Trade proto message.
      */
     void publish_trade(
-        uint64_t trade_id,
+        uint64_t    trade_id,
         const char* symbol,
-        int32_t  side,
-        int32_t  qty,
-        double   fill_price,
-        double   charges,
-        double   cash_after,
-        double   realized_pnl,
-        uint64_t ts_ns);
+        int32_t     side,
+        int32_t     qty,
+        double      fill_price,
+        double      charges,
+        double      cash_after,
+        double      realized_pnl,
+        uint64_t    ts_ns);
 
 private:
     redisContext* ctx_{nullptr};
@@ -77,8 +79,8 @@ private:
     /** Try to reconnect once; returns true on success. */
     bool try_reconnect();
 
-    /** Execute a command; reconnects once on failure. Returns reply or nullptr. */
-    redisReply* cmd(const char* fmt, ...);
+    /** Execute a binary-safe command via redisCommandArgv. Frees reply. */
+    void cmd_binary(int argc, const char** argv, const size_t* argvlen);
 };
 
 } // namespace alpha::market

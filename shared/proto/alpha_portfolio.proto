@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package alpha.portfolio;
+
+// ── Position ──────────────────────────────────────────────────────────────────
+// A single open position held at the time of the snapshot.
+message Position {
+    uint32 token          = 1;   // Upstox instrument token
+    string symbol         = 2;   // Human-readable symbol (e.g. "NIFTY")
+    int32  qty            = 3;   // Net position (+ve = long, -ve = short)
+    double avg_cost       = 4;   // Volume-weighted average entry price
+    double realized_pnl   = 5;   // Closed P&L for this instrument today
+    double unrealized_pnl = 6;   // MTM P&L at last known price
+}
+
+// ── PortfolioSnapshot ─────────────────────────────────────────────────────────
+// Full portfolio state published to HSET alpha:portfolio (field "data").
+// Written on every trade and periodically by the market engine.
+message PortfolioSnapshot {
+    double   cash             = 1;   // Available cash (₹)
+    double   equity           = 2;   // cash + MTM value of all open positions
+    double   realized_pnl     = 3;   // Total realized P&L for the session
+    double   total_charges    = 4;   // Cumulative brokerage + taxes paid
+    int32    open_positions   = 5;   // Number of non-flat positions
+    int32    total_trades     = 6;   // Fills executed this session
+    double   starting_capital = 7;   // Starting cash (₹) for return calculations
+    uint64   timestamp_ns     = 8;   // Wall-clock nanoseconds at publish time
+    repeated Position positions = 9; // All non-flat positions (may be empty)
+}
+
+// ── Trade ─────────────────────────────────────────────────────────────────────
+// A single fill event published to XADD alpha:trades (field "data").
+// Stream is capped at MAXLEN ~ 500 entries.
+message Trade {
+    uint64 trade_id     = 1;   // Monotonic fill counter
+    string symbol       = 2;   // Instrument symbol
+    int32  side         = 3;   // 1 = BUY, -1 = SELL
+    int32  qty          = 4;   // Shares / contracts filled
+    double fill_price   = 5;   // Actual execution price (with slippage)
+    double charges      = 6;   // Total transaction cost for this fill
+    double cash_after   = 7;   // Portfolio cash after the fill
+    double realized_pnl = 8;   // Realized P&L contribution from this fill
+    uint64 timestamp_ns = 9;   // Fill timestamp (nanoseconds)
+}

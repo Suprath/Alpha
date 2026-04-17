@@ -1,8 +1,6 @@
 #include "RedisPublisher.hpp"
-#include <cstdarg>
-#include <cstdio>
+#include "alpha_portfolio.pb.h"
 #include <iostream>
-#include <sstream>
 
 namespace alpha::market {
 
@@ -40,20 +38,19 @@ bool RedisPublisher::try_reconnect() {
     return true;
 }
 
-redisReply* RedisPublisher::cmd(const char* fmt, ...) {
-    if (!is_connected() && !try_reconnect()) return nullptr;
+void RedisPublisher::cmd_binary(int argc, const char** argv,
+                                const size_t* argvlen) {
+    if (!is_connected() && !try_reconnect()) return;
 
-    va_list args;
-    va_start(args, fmt);
-    auto* reply = static_cast<redisReply*>(redisvCommand(ctx_, fmt, args));
-    va_end(args);
+    auto* reply = static_cast<redisReply*>(
+        redisCommandArgv(ctx_, argc, argv, argvlen));
 
-    if (!reply && ctx_->err) {
+    if (!reply) {
         std::cerr << "[RedisPublisher] Command error: " << ctx_->errstr << "\n";
         redisFree(ctx_); ctx_ = nullptr;
-        return nullptr;
+        return;
     }
-    return reply;
+    freeReplyObject(reply);
 }
 
 void RedisPublisher::publish_portfolio(
@@ -69,89 +66,76 @@ void RedisPublisher::publish_portfolio(
 {
     if (!is_connected() && !try_reconnect()) return;
 
-    // Build HSET alpha:portfolio field value [field value ...]
-    // We store summary fields + one encoded field per position.
-    char cash_s[32], equity_s[32], rpnl_s[32], chg_s[32], sc_s[32], ts_s[32];
-    std::snprintf(cash_s,   sizeof(cash_s),   "%.2f", cash);
-    std::snprintf(equity_s, sizeof(equity_s), "%.2f", equity);
-    std::snprintf(rpnl_s,   sizeof(rpnl_s),   "%.2f", realized_pnl);
-    std::snprintf(chg_s,    sizeof(chg_s),    "%.2f", total_charges);
-    std::snprintf(sc_s,     sizeof(sc_s),     "%.2f", starting_capital);
-    std::snprintf(ts_s,     sizeof(ts_s),     "%llu", (unsigned long long)ts_ns);
+    // Build PortfolioSnapshot proto
+    alpha::portfolio::PortfolioSnapshot snap;
+    snap.set_cash(cash);
+    snap.set_equity(equity);
+    snap.set_realized_pnl(realized_pnl);
+    snap.set_total_charges(total_charges);
+    snap.set_open_positions(open_positions);
+    snap.set_total_trades(total_trades);
+    snap.set_starting_capital(starting_capital);
+    snap.set_timestamp_ns(ts_ns);
 
-    // Core snapshot fields
-    auto* r = cmd(
-        "HSET alpha:portfolio"
-        " cash %s"
-        " equity %s"
-        " realized_pnl %s"
-        " total_charges %s"
-        " open_positions %d"
-        " total_trades %d"
-        " starting_capital %s"
-        " ts %s",
-        cash_s, equity_s, rpnl_s, chg_s,
-        open_positions, total_trades, sc_s, ts_s);
-    if (r) freeReplyObject(r);
-
-    // Build pos_tokens comma list + per-position fields
-    std::ostringstream tokens_oss;
-    for (size_t i = 0; i < positions.size(); ++i) {
-        const auto& p = positions[i];
-        if (i > 0) tokens_oss << ",";
-        tokens_oss << p.token;
-
-        // "SYMBOL,qty,avg_cost,realized_pnl,unrealized_pnl"
-        char pos_val[128];
-        std::snprintf(pos_val, sizeof(pos_val), "%s,%d,%.4f,%.2f,%.2f",
-                      p.symbol, p.qty, p.avg_cost, p.realized_pnl, p.unrealized_pnl);
-
-        char field_name[32];
-        std::snprintf(field_name, sizeof(field_name), "pos_%u", p.token);
-
-        auto* pr = cmd("HSET alpha:portfolio %s %s", field_name, pos_val);
-        if (pr) freeReplyObject(pr);
+    for (const auto& p : positions) {
+        auto* pos = snap.add_positions();
+        pos->set_token(p.token);
+        pos->set_symbol(p.symbol);
+        pos->set_qty(p.qty);
+        pos->set_avg_cost(p.avg_cost);
+        pos->set_realized_pnl(p.realized_pnl);
+        pos->set_unrealized_pnl(p.unrealized_pnl);
     }
 
-    auto* tr = cmd("HSET alpha:portfolio pos_tokens %s",
-                   tokens_oss.str().c_str());
-    if (tr) freeReplyObject(tr);
+    std::string bytes;
+    if (!snap.SerializeToString(&bytes)) {
+        std::cerr << "[RedisPublisher] Failed to serialize PortfolioSnapshot\n";
+        return;
+    }
+
+    // HSET alpha:portfolio data <binary>  (binary-safe via redisCommandArgv)
+    const char* argv[] = {"HSET", "alpha:portfolio", "data", bytes.data()};
+    const size_t lens[] = {4, 17, 4, bytes.size()};
+    cmd_binary(4, argv, lens);
 }
 
 void RedisPublisher::publish_trade(
-    uint64_t trade_id,
+    uint64_t    trade_id,
     const char* symbol,
-    int32_t  side,
-    int32_t  qty,
-    double   fill_price,
-    double   charges,
-    double   cash_after,
-    double   realized_pnl,
-    uint64_t ts_ns)
+    int32_t     side,
+    int32_t     qty,
+    double      fill_price,
+    double      charges,
+    double      cash_after,
+    double      realized_pnl,
+    uint64_t    ts_ns)
 {
-    char fill_s[32], chg_s[32], cash_s[32], rpnl_s[32], ts_s[32];
-    std::snprintf(fill_s, sizeof(fill_s), "%.4f", fill_price);
-    std::snprintf(chg_s,  sizeof(chg_s),  "%.2f", charges);
-    std::snprintf(cash_s, sizeof(cash_s), "%.2f", cash_after);
-    std::snprintf(rpnl_s, sizeof(rpnl_s), "%.2f", realized_pnl);
-    std::snprintf(ts_s,   sizeof(ts_s),   "%llu", (unsigned long long)ts_ns);
+    if (!is_connected() && !try_reconnect()) return;
 
-    // XADD alpha:trades MAXLEN ~ 500 * <fields>
-    auto* r = cmd(
-        "XADD alpha:trades MAXLEN ~ 500 *"
-        " id %llu"
-        " sym %s"
-        " side %d"
-        " qty %d"
-        " fill %s"
-        " charges %s"
-        " cash %s"
-        " rpnl %s"
-        " ts %s",
-        (unsigned long long)trade_id,
-        symbol, side, qty,
-        fill_s, chg_s, cash_s, rpnl_s, ts_s);
-    if (r) freeReplyObject(r);
+    // Build Trade proto
+    alpha::portfolio::Trade trade;
+    trade.set_trade_id(trade_id);
+    trade.set_symbol(symbol);
+    trade.set_side(side);
+    trade.set_qty(qty);
+    trade.set_fill_price(fill_price);
+    trade.set_charges(charges);
+    trade.set_cash_after(cash_after);
+    trade.set_realized_pnl(realized_pnl);
+    trade.set_timestamp_ns(ts_ns);
+
+    std::string bytes;
+    if (!trade.SerializeToString(&bytes)) {
+        std::cerr << "[RedisPublisher] Failed to serialize Trade\n";
+        return;
+    }
+
+    // XADD alpha:trades MAXLEN ~ 500 * data <binary>
+    const char* argv[] = {
+        "XADD", "alpha:trades", "MAXLEN", "~", "500", "*", "data", bytes.data()
+    };
+    const size_t lens[] = {4, 12, 6, 1, 3, 1, 4, bytes.size()};
+    cmd_binary(8, argv, lens);
 }
 
 } // namespace alpha::market

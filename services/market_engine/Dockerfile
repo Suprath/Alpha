@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y \
     libboost-system-dev \
     libboost-dev \
     libhiredis-dev \
+    libprotobuf-dev \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -26,6 +28,7 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y \
     libboost-system1.81.0 \
     libhiredis0.14 \
+    libprotobuf32 \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 

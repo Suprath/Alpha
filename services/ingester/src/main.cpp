@@ -26,7 +26,7 @@
 
 #include <hiredis/hiredis.h>
 
-#include "alpha_tick.pb.h"               // generated from shared/proto/alpha_tick.proto
+#include "ProtoMapper.hpp"               // proto_to_tick(); includes alpha_tick.pb.h
 
 #include <alpha/config/Config.hpp>
 #include <alpha/ipc/ShmManager.hpp>
@@ -36,6 +36,7 @@
 
 using namespace alpha::models;
 using namespace alpha::ipc;
+using alpha::ingester::proto_to_tick;
 
 static std::atomic<bool> g_running{true};
 
@@ -61,44 +62,6 @@ static bool field_bin(redisReply* arr, const char* key,
         }
     }
     return false;
-}
-
-// ── Proto → internal Tick mapping ────────────────────────────────────────────
-
-static Tick proto_to_tick(const alpha::feed::Tick& p) {
-    Tick t{};
-    t.timestamp_ns     = p.timestamp_ns();
-    t.instrument_token = p.token();
-    t.last_price       = p.last_price();
-    t.total_volume     = p.volume();
-    t.open_interest    = p.open_interest();
-    t.bid_price        = p.bid_price();
-    t.bid_size         = p.bid_size();
-    t.ask_price        = p.ask_price();
-    t.ask_size         = p.ask_size();
-
-    const int bid_depth = std::min(5, p.bids_size());
-    for (int i = 0; i < bid_depth; ++i) {
-        t.bids[i].price    = p.bids(i).price();
-        t.bids[i].quantity = p.bids(i).quantity();
-        t.bids[i].orders   = p.bids(i).orders();
-    }
-    const int ask_depth = std::min(5, p.asks_size());
-    for (int i = 0; i < ask_depth; ++i) {
-        t.asks[i].price    = p.asks(i).price();
-        t.asks[i].quantity = p.asks(i).quantity();
-        t.asks[i].orders   = p.asks(i).orders();
-    }
-
-    // greeks() always returns a valid (possibly zero-filled) OptionGreeks message
-    t.greeks.delta = p.greeks().delta();
-    t.greeks.gamma = p.greeks().gamma();
-    t.greeks.theta = p.greeks().theta();
-    t.greeks.vega  = p.greeks().vega();
-    t.greeks.rho   = p.greeks().rho();
-    t.greeks.iv    = p.greeks().iv();
-
-    return t;
 }
 
 // ── Redis reconnect helper ────────────────────────────────────────────────────

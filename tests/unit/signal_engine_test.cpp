@@ -1289,7 +1289,7 @@ TEST(CompositeScoreTest, DefaultEqualWeights) {
 TEST(CompositeScoreTest, ScoreFormula) {
     CompositeScoreCalculator calc;
     // Set IC weights manually: IC_k = k+1 (positive, unequal)
-    std::array<double, NUM_SIGNALS> ic;
+    std::array<double, SIGNAL_CAPACITY> ic;
     for (uint32_t k = 0; k < NUM_SIGNALS; ++k) ic[k] = static_cast<double>(k + 1);
     calc.set_ic_weights(ic);
 
@@ -1312,7 +1312,7 @@ TEST(CompositeScoreTest, ScoreFormula) {
 
 TEST(CompositeScoreTest, NegativeICIsZeroed) {
     CompositeScoreCalculator calc;
-    std::array<double, NUM_SIGNALS> ic;
+    std::array<double, SIGNAL_CAPACITY> ic;
     ic.fill(1.0);
     ic[0] = -5.0; // negative → should be zeroed
     calc.set_ic_weights(ic);

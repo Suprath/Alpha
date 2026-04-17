@@ -1,0 +1,34 @@
+{
+    "configurations": [
+        {
+            "name": "Alpha (Mac)",
+            "includePath": [
+                "${workspaceFolder}/shared/cpp/include",
+                "${workspaceFolder}/services/signal_engine/src",
+                "${workspaceFolder}/services/signal_engine/src/shm_reader",
+                "${workspaceFolder}/services/signal_engine/src/shm_writer",
+                "${workspaceFolder}/services/signal_engine/src/core",
+                "${workspaceFolder}/services/signal_engine/src/pipelines",
+                "${workspaceFolder}/services/signal_engine/src/signals",
+                "${workspaceFolder}/services/signal_engine/src/signals/ofi",
+                "${workspaceFolder}/services/signal_engine/src/signals/trade_direction",
+                "${workspaceFolder}/services/signal_engine/src/signals/vpin",
+                "${workspaceFolder}/services/signal_engine/src/signals/kyles_lambda",
+                "${workspaceFolder}/services/signal_engine/src/signals/entropy",
+                "${workspaceFolder}/services/signal_engine/src/signals/bar",
+                "${workspaceFolder}/services/signal_engine/src/signals/options",
+                "${workspaceFolder}/services/signal_engine/src/signals/derived",
+                "${workspaceFolder}/services/ingester/src",
+                "${workspaceFolder}/services/market_engine/src",
+                "/usr/local/include",
+                "/usr/include"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/clang++",
+            "cStandard": "c17",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "macos-clang-x64"
+        }
+    ],
+    "version": 4
+}

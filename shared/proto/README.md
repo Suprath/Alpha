@@ -12,6 +12,7 @@ service generates its own bindings at build/image-build time.
 |---|---|---|---|---|---|
 | `market_data_v3.proto` | `com.upstox.marketdatafeederv3udapi.rpc.proto` | Upstox (external) | Upstox WebSocket wire | Upstox exchange | `data_feed` |
 | `alpha_tick.proto` | `alpha.feed` | `data_feed` | Redis Stream `alpha:ticks`, field `data` (binary) | `data_feed` | `ingester`, `signal_engine` |
+| `alpha_portfolio.proto` | `alpha.portfolio` | `market_engine` | Redis Hash `alpha:portfolio` field `data` (binary PortfolioSnapshot); Redis Stream `alpha:trades` field `data` (binary Trade) | `market_engine` | `tui` |
 
 ---
 
