@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <alpha/models/MarketModels.hpp>
+#include <alpha/models/BacktestSignal.hpp>
 #include "EnhancedBar.hpp"
 
 namespace alpha::signal::core {
@@ -106,6 +107,53 @@ public:
             std::cerr << "[QuestDB] Failed to send ILP data." << std::endl;
             ::close(sock_);
             sock_ = -1; // Trigger reconnect on next call if needed (or handle elsewhere)
+        }
+    }
+
+    /**
+     * @brief Write a BacktestSignal row to QuestDB backtest_signals table via ILP.
+     *
+     * Boolean ILP values use 't'/'f' (lowercase, no quotes — QuestDB ILP spec).
+     * The instrument_token is written as a tag (indexed) for fast WHERE queries.
+     */
+    void write_backtest_signal(const alpha::models::BacktestSignal& sig,
+                               const std::string& symbol) {
+        if (sock_ == -1) return;
+
+        auto bool_str = [](bool v) -> const char* { return v ? "t" : "f"; };
+
+        std::stringstream ss;
+        ss << "backtest_signals"
+           << ",symbol=" << symbol
+           << ",instrument_token=" << sig.instrument_token
+           << " "
+           << "log_return="         << sig.log_return         << ","
+           << "realized_vol_ann="   << sig.realized_vol_ann   << ","
+           << "bar_ofi="            << static_cast<double>(sig.bar_ofi) << ","
+           << "rsi_14="             << sig.rsi_14             << ","
+           << "macd_line="          << sig.macd_line          << ","
+           << "macd_signal="        << sig.macd_signal        << ","
+           << "macd_histogram="     << sig.macd_histogram     << ","
+           << "bb_upper="           << sig.bb_upper           << ","
+           << "bb_middle="          << sig.bb_middle          << ","
+           << "bb_lower="           << sig.bb_lower           << ","
+           << "bb_pct_b="           << sig.bb_pct_b           << ","
+           << "bb_bandwidth="       << sig.bb_bandwidth       << ","
+           << "vwap_deviation="     << sig.vwap_deviation     << ","
+           << "session_vwap="       << sig.session_vwap       << ","
+           << "valid_rsi="          << bool_str(sig.valid_rsi)  << ","
+           << "valid_macd="         << bool_str(sig.valid_macd) << ","
+           << "valid_bb="           << bool_str(sig.valid_bb)   << ","
+           << "valid_vwap_dev="     << bool_str(sig.valid_vwap_dev)
+           << " "
+           << sig.timestamp_ns << "\n";
+
+        std::string payload = ss.str();
+        ssize_t sent = send(sock_, payload.c_str(), payload.size(), 0);
+        if (sent < 0) {
+            std::cerr << "[QuestDB] Failed to send backtest signal." << std::endl;
+            ::close(sock_);
+            sock_ = -1;
         }
     }
 

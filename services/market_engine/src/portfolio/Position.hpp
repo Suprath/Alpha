@@ -46,7 +46,6 @@ struct Position {
      */
     void apply_fill(int32_t fill_qty, double fill_price, double charges, uint64_t ts_ns) {
         total_charges += charges;
-        const double cost_per_unit = fill_price + (fill_qty > 0 ? charges / std::abs(fill_qty) : 0.0);
 
         if (qty == 0) {
             avg_cost     = fill_price;

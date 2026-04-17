@@ -149,6 +149,7 @@ public:
         if (auto it = positions_.find(token); it != positions_.end()) {
             it->second.is_open = false;
         }
+        result.is_open = false;  // Reflect closure in the returned value
         return result;
     }
 

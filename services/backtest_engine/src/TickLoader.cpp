@@ -172,5 +172,85 @@ size_t TickLoader::export_to_alpha_file(
     return ticks.size();
 }
 
+// ── Signal loading ─────────────────────────────────────────────────────────────
+
+std::vector<models::BacktestSignal> TickLoader::load_signals_from_questdb(
+    const std::string& qdb_pg_dsn,
+    uint32_t           instrument_token,
+    uint64_t           start_ns,
+    uint64_t           end_ns)
+{
+    std::vector<models::BacktestSignal> out;
+
+    pqxx::connection conn(qdb_pg_dsn);
+    pqxx::work txn(conn);
+
+    const uint64_t start_us = start_ns / 1000ULL;
+    const uint64_t end_us   = end_ns   / 1000ULL;
+
+    const std::string sql =
+        "SELECT cast(timestamp as long) as ts_us, instrument_token, "
+        "  log_return, realized_vol_ann, bar_ofi, "
+        "  rsi_14, macd_line, macd_signal, macd_histogram, "
+        "  bb_upper, bb_middle, bb_lower, bb_pct_b, bb_bandwidth, "
+        "  vwap_deviation, session_vwap, "
+        "  valid_rsi, valid_macd, valid_bb, valid_vwap_dev "
+        "FROM backtest_signals "
+        "WHERE instrument_token = " + txn.quote(static_cast<int64_t>(instrument_token)) +
+        "  AND timestamp >= cast(" + std::to_string(start_us) + " as timestamp)"
+        "  AND timestamp <= cast(" + std::to_string(end_us)   + " as timestamp)"
+        " ORDER BY timestamp";
+
+    const auto result = txn.exec(sql);
+    out.reserve(result.size());
+
+    for (const auto& row : result) {
+        models::BacktestSignal s{};
+        s.timestamp_ns     = row[0].as<uint64_t>() * 1000ULL;  // μs → ns
+        s.instrument_token = row[1].as<uint32_t>();
+        s.log_return       = row[2].as<double>();
+        s.realized_vol_ann = row[3].as<double>();
+        s.bar_ofi          = static_cast<float>(row[4].as<double>());
+        s.rsi_14           = row[5].as<double>();
+        s.macd_line        = row[6].as<double>();
+        s.macd_signal      = row[7].as<double>();
+        s.macd_histogram   = row[8].as<double>();
+        s.bb_upper         = row[9].as<double>();
+        s.bb_middle        = row[10].as<double>();
+        s.bb_lower         = row[11].as<double>();
+        s.bb_pct_b         = row[12].as<double>();
+        s.bb_bandwidth     = row[13].as<double>();
+        s.vwap_deviation   = row[14].as<double>();
+        s.session_vwap     = row[15].as<double>();
+        s.valid_rsi        = row[16].as<bool>();
+        s.valid_macd       = row[17].as<bool>();
+        s.valid_bb         = row[18].as<bool>();
+        s.valid_vwap_dev   = row[19].as<bool>();
+        out.push_back(s);
+    }
+
+    return out;
+}
+
+SignalMap TickLoader::load_signals_as_map(
+    const std::string& qdb_pg_dsn,
+    uint32_t           instrument_token,
+    uint64_t           start_ns,
+    uint64_t           end_ns)
+{
+    auto signals = load_signals_from_questdb(qdb_pg_dsn, instrument_token, start_ns, end_ns);
+    SignalMap map;
+    map.reserve(signals.size());
+
+    static constexpr uint64_t ONE_MINUTE_NS = 60'000'000'000ULL;
+    for (auto& sig : signals) {
+        // Normalise to bar-open minute boundary (key used by SimRunner lookup)
+        const uint64_t bar_ts = (sig.timestamp_ns / ONE_MINUTE_NS) * ONE_MINUTE_NS;
+        map.emplace(bar_ts, std::move(sig));
+    }
+
+    return map;
+}
+
 } // namespace backtest
 } // namespace alpha

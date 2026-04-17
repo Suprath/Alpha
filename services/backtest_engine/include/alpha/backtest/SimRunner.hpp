@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <alpha/models/BacktestTick.hpp>
+#include <alpha/models/BacktestSignal.hpp>
 #include <alpha/models/MarketModels.hpp>
 #include "BacktestClock.hpp"
 #include "TickLoader.hpp"
@@ -52,29 +53,31 @@ struct SimConfig {
 class SimRunner {
 public:
     /**
-     * Strategy function signature.
-     * Receives the current tick and a read-only clock.
-     * Returns an OrderIntent (action=0 means no trade).
-     * Must NOT read any market data with timestamp > clock.now() (look-ahead).
+     * Strategy function signature — signal-aware.
+     * Receives tick, clock, and a pointer to the pre-computed BacktestSignal
+     * for this bar (nullptr if no signal was loaded for this timestamp).
+     * Returns OrderIntent (qty=0 means no trade).
+     * Must NOT access market data with timestamp > clock.now() (look-ahead violation).
      */
     using StrategyFn = std::function<
-        models::OrderIntent(const models::BacktestTick& tick,
-                            const BacktestClock&        clock)>;
+        models::OrderIntent(const models::BacktestTick&    tick,
+                            const BacktestClock&            clock,
+                            const models::BacktestSignal*  signal)>;
 
     SimRunner(SimConfig cfg, StrategyFn strategy);
 
     /**
-     * Run backtest on a binary .alpha file (BINARY_MMAP path).
-     * @return Final performance statistics.
+     * Run backtest on a binary .alpha file with optional pre-computed signals.
      */
-    BacktestResult run(const std::string& alpha_file_path);
+    BacktestResult run(const std::string& alpha_file_path,
+                       const SignalMap&   signals = {});
 
     /**
-     * Run backtest on an in-memory tick array (QUESTDB_SQL or test path).
-     * @param ticks   Pointer to contiguous BacktestTick array.
-     * @param count   Number of ticks.
+     * Run backtest on an in-memory tick array with optional pre-computed signals.
      */
-    BacktestResult run(const models::BacktestTick* ticks, size_t count);
+    BacktestResult run(const models::BacktestTick* ticks,
+                       size_t                      count,
+                       const SignalMap&             signals = {});
 
     /** Reset all state for a fresh simulation run on the same SimRunner. */
     void reset();
@@ -90,6 +93,9 @@ private:
     BacktestClock    clock_;
     ResultAggregator aggregator_;
     TickLoader       loader_;
+    const SignalMap* signals_{nullptr};  // Non-owning ptr; set per run()
+
+    static constexpr uint64_t ONE_MINUTE_NS = 60'000'000'000ULL;
 
     // Position tracking (per instrument — simplified: single position)
     double   equity_;

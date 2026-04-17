@@ -276,6 +276,33 @@ services:
           cpus: '1.0'
           memory: 512M
 
+  # ── Signal Engine: backtest batch mode ────────────────────────────────────────
+  # Run-to-completion: computes OHLCV-derivable signals (RSI, MACD, BB, VWAP dev)
+  # for historical candles and writes them to QuestDB's backtest_signals table.
+  # Triggered by the TUI (X key → run_signal_engine_batch) before backtest-engine.
+  signal-engine-backtest:
+    build:
+      context: .
+      dockerfile: services/signal_engine/Dockerfile
+    image: alpha-signal-engine:latest    # Reuses same image as live signal-engine
+    container_name: alpha-signal-engine-backtest
+    restart: "no"  # Run-to-completion job
+    command: ["--backtest-batch"]
+    environment:
+      - TZ=Asia/Kolkata
+      - QUESTDB_HOST=questdb
+      - QUESTDB_PG_PORT=8812
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    depends_on:
+      - questdb
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+
   backtest-engine:
     build:
       context: .
@@ -291,12 +318,15 @@ services:
       - BROKERAGE_FLAT=20
       - SLIPPAGE_BPS=2
       - BATCH_SIZE=1024
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - alpha_backtest_data:/data/backtest
     depends_on:
       - questdb
+      - redis
     deploy:
       resources:
         limits:

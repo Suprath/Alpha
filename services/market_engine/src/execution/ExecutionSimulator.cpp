@@ -1,6 +1,7 @@
 #include "ExecutionSimulator.hpp"
 #include "../core/TaxCalculator.hpp"
 #include <alpha/time/Timestamp.hpp>
+#include <cstdio>
 #include <cstring>
 #include <cmath>
 
@@ -23,8 +24,7 @@ Trade ExecutionSimulator::simulate(
     t.confidence       = intent.confidence;
     t.strategy_id      = intent.strategy_id;
     t.order_reason     = intent.reason;
-    std::strncpy(t.symbol, intent.symbol, sizeof(t.symbol) - 1);
-    t.symbol[sizeof(t.symbol) - 1] = '\0';
+    std::snprintf(t.symbol, sizeof(t.symbol), "%s", intent.symbol);
 
     // Apply slippage: buyer pays more, seller receives less
     const double slip = SlippageModel::slippage_fraction(info.segment);

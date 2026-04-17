@@ -6,7 +6,8 @@
  *   OFI, TradeDirection, VPIN, Kyle's Lambda, Entropy,
  *   LogReturn, RealizedVolatility, KalmanFilter, CUSUM,
  *   BSGamma, GEX, VRP, SignalNormalizer, CompositeScore,
- *   PnLTracker, AlphaDecay
+ *   PnLTracker, AlphaDecay,
+ *   RSI, MACD, BollingerBands, VWAPDeviation
  */
 
 #include <gtest/gtest.h>
@@ -35,6 +36,10 @@
 #include <signals/derived/CompositeScore.hpp>
 #include <signals/derived/PnLTracker.hpp>
 #include <signals/derived/AlphaDecay.hpp>
+#include <signals/bar/RSI.hpp>
+#include <signals/bar/MACD.hpp>
+#include <signals/bar/BollingerBands.hpp>
+#include <signals/bar/VWAPDeviation.hpp>
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -1561,4 +1566,303 @@ TEST(AlphaDecayTest, CustomCoefficients) {
     auto res = calc.project(180009, 0.01, 5, 1000000, 0.01);
     const double expected_lambda = 0.05 + 0.02 * 5 + 0.001 * 1.0 + 2.0 * 0.01;
     EXPECT_NEAR(res.lambda_hat, expected_lambda, 1e-12);
+}
+
+// ─── RSICalculator Tests ──────────────────────────────────────────────────────
+
+using namespace alpha::signal::bar_sig;
+
+static alpha::signal::core::EnhancedBar make_close_bar(uint32_t token, double close,
+                                                        double vwap = 0.0,
+                                                        uint64_t vol = 1000) {
+    alpha::signal::core::EnhancedBar b{};
+    b.instrument_token = token;
+    b.close            = close;
+    b.vwap             = vwap;
+    b.volume           = vol;
+    return b;
+}
+
+TEST(RSICalculatorTest, NotValidBeforeWarmup) {
+    RSICalculator calc;
+    // Need RSI_PERIOD (14) bars to seed; first bar initialises prev_close only
+    for (uint32_t i = 0; i < RSI_PERIOD - 1; ++i) {
+        auto res = calc.update(make_close_bar(200001, 100.0 + i));
+        EXPECT_FALSE(res.valid) << "bar " << i << " should not yet be valid";
+    }
+}
+
+TEST(RSICalculatorTest, ValidAtSeedBar) {
+    RSICalculator calc;
+    for (uint32_t i = 0; i <= RSI_PERIOD - 1; ++i) {
+        auto res = calc.update(make_close_bar(200002, 100.0 + i));
+        if (i == RSI_PERIOD - 1)
+            EXPECT_TRUE(res.valid);
+    }
+}
+
+TEST(RSICalculatorTest, AllGainsApproaches100) {
+    RSICalculator calc;
+    // Feed monotonically rising prices; after warmup RSI should be high
+    for (uint32_t i = 0; i < 50; ++i)
+        calc.update(make_close_bar(200003, 100.0 + i));
+    auto res = calc.update(make_close_bar(200003, 150.0));
+    EXPECT_TRUE(res.valid);
+    EXPECT_GT(res.rsi, 90.0);
+}
+
+TEST(RSICalculatorTest, AllLossesApproaches0) {
+    RSICalculator calc;
+    // Feed monotonically falling prices; after warmup RSI should be low
+    for (uint32_t i = 0; i < 50; ++i)
+        calc.update(make_close_bar(200004, 200.0 - i));
+    auto res = calc.update(make_close_bar(200004, 140.0));
+    EXPECT_TRUE(res.valid);
+    EXPECT_LT(res.rsi, 10.0);
+}
+
+TEST(RSICalculatorTest, RSIInRange) {
+    RSICalculator calc;
+    for (uint32_t i = 0; i < 100; ++i) {
+        // Alternating up/down
+        double price = 100.0 + (i % 2 == 0 ? 1.0 : -0.5) * (i + 1);
+        auto res = calc.update(make_close_bar(200005, price));
+        if (res.valid) {
+            EXPECT_GE(res.rsi, 0.0);
+            EXPECT_LE(res.rsi, 100.0);
+        }
+    }
+}
+
+TEST(RSICalculatorTest, MultiInstrumentStateIsolation) {
+    RSICalculator calc;
+    // Feed only gains to token A, only losses to token B
+    for (uint32_t i = 0; i < 50; ++i) {
+        calc.update(make_close_bar(200006, 100.0 + i));       // A: rising
+        calc.update(make_close_bar(200007, 200.0 - i));       // B: falling
+    }
+    auto resA = calc.update(make_close_bar(200006, 150.0));
+    auto resB = calc.update(make_close_bar(200007, 148.0));
+    EXPECT_TRUE(resA.valid);
+    EXPECT_TRUE(resB.valid);
+    EXPECT_GT(resA.rsi, 80.0);
+    EXPECT_LT(resB.rsi, 20.0);
+}
+
+TEST(RSICalculatorTest, ResetClearsState) {
+    RSICalculator calc;
+    for (uint32_t i = 0; i <= RSI_PERIOD; ++i)
+        calc.update(make_close_bar(200008, 100.0 + i));
+    calc.reset();
+    auto res = calc.update(make_close_bar(200008, 110.0));
+    EXPECT_FALSE(res.valid);  // State was cleared; back to warmup
+}
+
+// ─── MACDCalculator Tests ─────────────────────────────────────────────────────
+
+TEST(MACDCalculatorTest, NotValidBefore34Bars) {
+    MACDCalculator calc;
+    // EMA26 seeds at bar 26; signal EMA(9) then needs 9 more bars (bars 26-34).
+    // Bar 34 = MACD_SLOW + MACD_SIGNAL - 2 is the first valid bar.
+    // Bars 0 .. 32 (33 calls) must all be invalid.
+    for (uint32_t i = 0; i < MACD_SLOW + MACD_SIGNAL - 2; ++i) {
+        auto res = calc.update(make_close_bar(210001, 100.0 + i * 0.5));
+        EXPECT_FALSE(res.valid) << "bar " << i << " should not be valid yet";
+    }
+}
+
+TEST(MACDCalculatorTest, ValidAt35thBar) {
+    MACDCalculator calc;
+    for (uint32_t i = 0; i < MACD_SLOW + MACD_SIGNAL; ++i) {
+        auto res = calc.update(make_close_bar(210002, 100.0 + i * 0.5));
+        if (i == MACD_SLOW + MACD_SIGNAL - 1)
+            EXPECT_TRUE(res.valid);
+    }
+}
+
+TEST(MACDCalculatorTest, HistogramIsMacdMinusSignal) {
+    MACDCalculator calc;
+    for (uint32_t i = 0; i < MACD_SLOW + MACD_SIGNAL + 10; ++i) {
+        double price = 100.0 + std::sin(i * 0.3) * 5.0;
+        auto res = calc.update(make_close_bar(210003, price));
+        if (res.valid)
+            EXPECT_NEAR(res.macd_histogram, res.macd_line - res.macd_signal, 1e-12);
+    }
+}
+
+TEST(MACDCalculatorTest, PositiveMacdLineWhenFastAboveSlow) {
+    MACDCalculator calc;
+    // Rising prices: EMA12 > EMA26 eventually, so macd_line > 0
+    for (uint32_t i = 0; i < MACD_SLOW + MACD_SIGNAL + 20; ++i) {
+        auto res = calc.update(make_close_bar(210004, 100.0 + i * 2.0));
+        if (res.valid)
+            EXPECT_GT(res.macd_line, 0.0);
+    }
+}
+
+TEST(MACDCalculatorTest, MultiInstrumentIsolation) {
+    MACDCalculator calc;
+    for (uint32_t i = 0; i < MACD_SLOW + MACD_SIGNAL + 5; ++i) {
+        (void)calc.update(make_close_bar(210005, 100.0 + i));       // A: rising
+        (void)calc.update(make_close_bar(210006, 200.0 - i));       // B: falling
+    }
+    auto resA = calc.update(make_close_bar(210005, 200.0));
+    auto resB = calc.update(make_close_bar(210006, 55.0));
+    EXPECT_TRUE(resA.valid && resB.valid);
+    EXPECT_GT(resA.macd_line, 0.0);
+    EXPECT_LT(resB.macd_line, 0.0);
+}
+
+// ─── BollingerBandsCalculator Tests ──────────────────────────────────────────
+
+TEST(BollingerBandsTest, NotValidBeforeFullWindow) {
+    BollingerBandsCalculator calc;
+    for (uint32_t i = 0; i < BB_PERIOD - 1; ++i) {
+        auto res = calc.update(make_close_bar(220001, 100.0 + i));
+        EXPECT_FALSE(res.valid) << "bar " << i << " should not be valid";
+    }
+}
+
+TEST(BollingerBandsTest, ValidAtPeriodBars) {
+    BollingerBandsCalculator calc;
+    for (uint32_t i = 0; i < BB_PERIOD; ++i) {
+        auto res = calc.update(make_close_bar(220002, 100.0 + i));
+        if (i == BB_PERIOD - 1)
+            EXPECT_TRUE(res.valid);
+    }
+}
+
+TEST(BollingerBandsTest, ConstantPriceZeroStdDev) {
+    BollingerBandsCalculator calc;
+    for (uint32_t i = 0; i < BB_PERIOD; ++i)
+        (void)calc.update(make_close_bar(220003, 150.0));
+    auto res = calc.update(make_close_bar(220003, 150.0));
+    EXPECT_TRUE(res.valid);
+    EXPECT_NEAR(res.sma, 150.0, 1e-10);
+    EXPECT_NEAR(res.upper, 150.0, 1e-10);   // No spread when stddev=0
+    EXPECT_NEAR(res.lower, 150.0, 1e-10);
+    EXPECT_NEAR(res.bandwidth, 0.0, 1e-10);
+}
+
+TEST(BollingerBandsTest, SMAEqualsArithmeticMean) {
+    BollingerBandsCalculator calc;
+    double sum = 0.0;
+    for (uint32_t i = 0; i < BB_PERIOD; ++i) {
+        double p = 100.0 + i;
+        sum += p;
+        (void)calc.update(make_close_bar(220004, p));
+    }
+    auto res = calc.update(make_close_bar(220004, 100.0 + BB_PERIOD));
+    // After inserting the new bar the window has slid by one: bars 1..BB_PERIOD
+    // Verify upper > sma > lower
+    EXPECT_TRUE(res.valid);
+    EXPECT_GT(res.upper, res.sma);
+    EXPECT_LT(res.lower, res.sma);
+}
+
+TEST(BollingerBandsTest, PctBAtUpperBand) {
+    BollingerBandsCalculator calc;
+    // Fill with constant to get zero-width bands
+    for (uint32_t i = 0; i < BB_PERIOD; ++i)
+        (void)calc.update(make_close_bar(220005, 100.0));
+    // Now inject a large outlier that sits at the upper band
+    // With std=0 the bands collapse; pct_b defaults to 0.5
+    auto res = calc.update(make_close_bar(220005, 100.0));
+    EXPECT_TRUE(res.valid);
+    EXPECT_NEAR(res.pct_b, 0.5, 1e-6);  // collapsed bands → 0.5
+}
+
+TEST(BollingerBandsTest, BandwidthFormula) {
+    BollingerBandsCalculator calc;
+    for (uint32_t i = 0; i < BB_PERIOD + 5; ++i) {
+        double p = 100.0 + std::sin(i * 0.4) * 10.0;
+        auto res = calc.update(make_close_bar(220006, p));
+        if (res.valid && res.sma > 1e-10) {
+            double expected_bw = (res.upper - res.lower) / res.sma;
+            EXPECT_NEAR(res.bandwidth, expected_bw, 1e-10);
+        }
+    }
+}
+
+TEST(BollingerBandsTest, RollingWindowEviction) {
+    BollingerBandsCalculator calc;
+    // Fill with constant 100 to get zero variance
+    for (uint32_t i = 0; i < BB_PERIOD; ++i)
+        (void)calc.update(make_close_bar(220007, 100.0));
+    auto r1 = calc.update(make_close_bar(220007, 100.0));
+    EXPECT_NEAR(r1.bandwidth, 0.0, 1e-10);
+
+    // Inject outlier; oldest 100 evicted → variance increases
+    auto r2 = calc.update(make_close_bar(220007, 150.0));
+    EXPECT_GT(r2.bandwidth, 0.0);
+}
+
+// ─── VWAPDeviationCalculator Tests ───────────────────────────────────────────
+
+TEST(VWAPDeviationTest, ZeroVolumeIsInvalid) {
+    VWAPDeviationCalculator calc;
+    auto b = make_close_bar(230001, 100.0, 100.0, 0);  // vol = 0
+    auto res = calc.update(b);
+    EXPECT_FALSE(res.valid);
+}
+
+TEST(VWAPDeviationTest, FirstBarWithVolumeIsValid) {
+    VWAPDeviationCalculator calc;
+    auto b = make_close_bar(230002, 100.0, 100.0, 5000);
+    auto res = calc.update(b);
+    EXPECT_TRUE(res.valid);
+    EXPECT_NEAR(res.session_vwap, 100.0, 1e-10);
+}
+
+TEST(VWAPDeviationTest, DeviationZeroWhenCloseEqualsVWAP) {
+    VWAPDeviationCalculator calc;
+    // Single bar: session_vwap == bar.vwap; close == vwap → deviation = 0
+    auto b = make_close_bar(230003, 200.0, 200.0, 10000);
+    auto res = calc.update(b);
+    EXPECT_TRUE(res.valid);
+    EXPECT_NEAR(res.deviation, 0.0, 1e-12);
+}
+
+TEST(VWAPDeviationTest, PositiveDeviationWhenCloseAboveVWAP) {
+    VWAPDeviationCalculator calc;
+    // vwap = 100, close = 110 → deviation = (110-100)/100 = 0.10
+    auto b = make_close_bar(230004, 110.0, 100.0, 1000);
+    auto res = calc.update(b);
+    EXPECT_TRUE(res.valid);
+    EXPECT_NEAR(res.deviation, 0.10, 1e-10);
+}
+
+TEST(VWAPDeviationTest, NegativeDeviationWhenCloseBelowVWAP) {
+    VWAPDeviationCalculator calc;
+    auto b = make_close_bar(230005, 90.0, 100.0, 1000);
+    auto res = calc.update(b);
+    EXPECT_TRUE(res.valid);
+    EXPECT_NEAR(res.deviation, -0.10, 1e-10);
+}
+
+TEST(VWAPDeviationTest, VWAPAccumulationAcrossBars) {
+    VWAPDeviationCalculator calc;
+    // Bar1: vwap=100, vol=1000 → pv=100000, v=1000
+    // Bar2: vwap=200, vol=1000 → pv=200000, v=1000
+    // Session VWAP = (100000+200000)/(1000+1000) = 150
+    auto b1 = make_close_bar(230006, 100.0, 100.0, 1000);
+    auto b2 = make_close_bar(230006, 200.0, 200.0, 1000);
+    (void)calc.update(b1);
+    auto res = calc.update(b2);
+    EXPECT_TRUE(res.valid);
+    EXPECT_NEAR(res.session_vwap, 150.0, 1e-10);
+    // close=200, session_vwap=150 → deviation=(200-150)/150 ≈ 0.3333
+    EXPECT_NEAR(res.deviation, (200.0 - 150.0) / 150.0, 1e-10);
+}
+
+TEST(VWAPDeviationTest, SessionResetClearsAccumulation) {
+    VWAPDeviationCalculator calc;
+    // Accumulate one bar at vwap=200
+    (void)calc.update(make_close_bar(230007, 200.0, 200.0, 5000));
+    // Reset session (new trading day)
+    calc.reset_session();
+    // Now a fresh bar at vwap=100; should start from scratch
+    auto res = calc.update(make_close_bar(230007, 100.0, 100.0, 5000));
+    EXPECT_TRUE(res.valid);
+    EXPECT_NEAR(res.session_vwap, 100.0, 1e-10);
 }

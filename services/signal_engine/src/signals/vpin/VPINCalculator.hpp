@@ -149,8 +149,8 @@ public:
         while (vol_carry > 0u) {
             const uint64_t capacity = state.bucket_size - state.cur_bucket_vol;
 
-            if (vol_carry <= capacity) {
-                // Fits entirely in the current bucket — common case
+            if (vol_carry < capacity) {
+                // Fits entirely in the current bucket without filling it — common case
                 state.cur_bucket_vol += vol_carry;
                 state.cur_buy_vol    += buy_carry;
                 state.cur_sell_vol   += sell_carry;

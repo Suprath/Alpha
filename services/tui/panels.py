@@ -28,6 +28,8 @@ from commands import (
     get_stream_lengths,
     get_container_logs,
     list_alpha_files,
+    get_backtest_status,
+    get_backtest_result,
 )
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
@@ -641,7 +643,7 @@ class BacktestStatusPanel(Widget):
 # ── Backtest Results Panel ─────────────────────────────────────────────────────
 
 class BacktestResultsPanel(Widget):
-    """Research mode: live stream of alpha-backtest-tui container output. Refreshes every 2s."""
+    """Research mode: backtest status + results from Redis proto keys. Refreshes every 2s."""
 
     def compose(self) -> ComposeResult:
         yield Static("", id="bt-results-header")
@@ -656,40 +658,95 @@ class BacktestResultsPanel(Widget):
 
     @work(thread=True, exclusive=True)
     def _fetch(self) -> None:
-        bt_logs = get_container_logs("alpha-backtest-tui", tail=80)
+        status = get_backtest_status()
+        result = get_backtest_result()
         bf_logs = get_container_logs("alpha-data-feed-historical-tui", tail=10)
-        self.app.call_from_thread(self._render, bt_logs, bf_logs)
+        self.app.call_from_thread(self._render, status, result, bf_logs)
 
-    def _render(self, bt_logs: str, bf_logs: str) -> None:
+    def _render(self, status: dict, result: dict, bf_logs: str) -> None:
+        state = status.get("state", "IDLE")
+        symbol = status.get("symbol", "")
+        hdr_right = f"[{GR}]Redis · 2s[/]"
+        if state == "RUNNING":
+            pct = status.get("progress_pct", 0.0)
+            hdr_right = f"[{B}]{symbol} · {pct:.1f}%[/]"
+        elif state == "DONE":
+            hdr_right = f"[{G}]{symbol} · Done[/]"
+        elif state == "ERROR":
+            hdr_right = f"[{R}]{symbol} · Error[/]"
+
         self.query_one("#bt-results-header", Static).update(
-            hdr("BACKTEST OUTPUT", f"[{GR}]alpha-backtest-tui · 2s[/]")
+            hdr("BACKTEST", hdr_right)
         )
         log_w = self.query_one("#bt-results-log", RichLog)
         log_w.clear()
 
-        # Show recent backfill progress at the top if available
+        # Backfill progress at top
         if bf_logs.strip() and not bf_logs.startswith("[error"):
             log_w.write(f"[{DIM}]── backfill ──────────────────────────[/]")
-            for line in bf_logs.strip().splitlines()[-4:]:
+            for line in bf_logs.strip().splitlines()[-3:]:
                 log_w.write(f"[{GR}]{line}[/]")
 
-        if not bt_logs.strip() or bt_logs.startswith("[error"):
-            log_w.write(f"[{GR}]No backtest output yet — press X to run.[/]")
+        # Status section
+        log_w.write(f"[{DIM}]── status ────────────────────────────[/]")
+        state_color = {
+            "IDLE": GR, "LOADING": Y, "RUNNING": B, "DONE": G, "ERROR": R
+        }.get(state, GR)
+
+        log_w.write(f"  State   [{state_color}]{state}[/]")
+        if symbol:
+            log_w.write(f"  Symbol  [{W}]{symbol}[/]")
+        if state == "RUNNING":
+            ticks_done = status.get("ticks_processed", 0)
+            ticks_total = status.get("total_ticks", 0)
+            pct = status.get("progress_pct", 0.0)
+            filled = int(pct / 5)
+            prog_bar = f"[{G}]{'█' * filled}[/][{DIM}]{'░' * (20 - filled)}[/]"
+            log_w.write(f"  Progress {prog_bar} {pct:.1f}%")
+            if ticks_total:
+                log_w.write(f"  Ticks   [{GR}]{ticks_done:,} / {ticks_total:,}[/]")
+        if status.get("message"):
+            log_w.write(f"  [{GR}]{status['message']}[/]")
+
+        # Results section (only when DONE or has data)
+        if not result or state not in ("DONE", "ERROR"):
+            if state == "IDLE":
+                log_w.write("")
+                log_w.write(f"[{GR}]  No backtest run yet — press X to run.[/]")
             return
 
-        log_w.write(f"[{DIM}]── backtest ─────────────────────────[/]")
-        for line in bt_logs.strip().splitlines():
-            u = line.upper()
-            if any(k in u for k in ("RESULT", "FINAL", "NET P", "WIN RATE", "SHARPE", "DRAWDOWN")):
-                log_w.write(f"[bold {G}]{line}[/]")
-            elif any(k in u for k in ("ERROR", "FAILED", "PANIC")):
-                log_w.write(f"[{R}]{line}[/]")
-            elif any(k in u for k in ("LOADED", "RUNNING", "EXPORT", "FOUND")):
-                log_w.write(f"[{B}]{line}[/]")
-            elif "TRADE" in u:
-                log_w.write(f"[{Y}]{line}[/]")
-            else:
-                log_w.write(f"[{GR}]{line}[/]")
+        log_w.write(f"[{DIM}]── results ───────────────────────────[/]")
+
+        net_pnl   = result.get("total_net_pnl", 0.0)
+        ret_pct   = result.get("total_return_pct", 0.0)
+        pnl_color = G if net_pnl >= 0 else R
+
+        log_w.write(f"  Net PnL      [{pnl_color}]₹{net_pnl:>12,.2f}[/]")
+        log_w.write(f"  Return       [{pnl_color}]{ret_pct:>+.2f}%[/]")
+        log_w.write(f"  Capital      [{W}]₹{result.get('starting_capital', 0):>12,.0f}[/]  →  [{W}]₹{result.get('final_equity', 0):>12,.0f}[/]")
+        log_w.write("")
+        log_w.write(f"  [{DIM}]── risk ─────────────────────────────[/]")
+        log_w.write(f"  Sharpe       [{C}]{result.get('sharpe_ratio', 0.0):>8.3f}[/]")
+        log_w.write(f"  Sortino      [{C}]{result.get('sortino_ratio', 0.0):>8.3f}[/]")
+        log_w.write(f"  Calmar       [{C}]{result.get('calmar_ratio', 0.0):>8.3f}[/]")
+        max_dd     = result.get("max_drawdown", 0.0)
+        max_dd_pct = result.get("max_drawdown_pct", 0.0)
+        log_w.write(f"  Max DD       [{R}]₹{max_dd:>10,.2f}  ({max_dd_pct:.2f}%)[/]")
+        log_w.write("")
+        log_w.write(f"  [{DIM}]── trades ───────────────────────────[/]")
+        total_t   = result.get("total_trades", 0)
+        win_t     = result.get("winning_trades", 0)
+        lose_t    = result.get("losing_trades", 0)
+        win_rate  = result.get("win_rate", 0.0)
+        wr_color  = G if win_rate >= 50 else R
+        log_w.write(f"  Total        [{W}]{total_t:>6}[/]  Win [{G}]{win_t}[/]  Loss [{R}]{lose_t}[/]")
+        log_w.write(f"  Win Rate     [{wr_color}]{win_rate:>6.1f}%[/]")
+        log_w.write(f"  Profit Factor[{C}]{result.get('profit_factor', 0.0):>7.2f}[/]")
+        log_w.write(f"  Expectancy   [{C}]₹{result.get('expectancy', 0.0):>8,.2f}[/]")
+        log_w.write(f"  Avg Trade    [{GR}]₹{result.get('avg_trade_pnl', 0.0):>8,.2f}[/]")
+        log_w.write(f"  Avg Win      [{G}]₹{result.get('avg_win', 0.0):>8,.2f}[/]  Avg Loss [{R}]₹{result.get('avg_loss', 0.0):>8,.2f}[/]")
+        log_w.write(f"  Largest Win  [{G}]₹{result.get('largest_win', 0.0):>8,.2f}[/]  Largest Loss [{R}]₹{result.get('largest_loss', 0.0):>8,.2f}[/]")
+        log_w.write(f"  Commission   [{Y}]₹{result.get('total_commission', 0.0):>8,.2f}[/]")
 
 
 # ── Backfill Status Panel ──────────────────────────────────────────────────────

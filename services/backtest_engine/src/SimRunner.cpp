@@ -26,23 +26,31 @@ void SimRunner::reset() {
     open_entry_ts_     = 0;
     open_side_         = 0;
     open_instrument_   = 0;
+    signals_           = nullptr;
 }
 
-BacktestResult SimRunner::run(const std::string& alpha_file_path) {
+BacktestResult SimRunner::run(const std::string& alpha_file_path,
+                               const SignalMap&   signals) {
     reset();
+    signals_ = signals.empty() ? nullptr : &signals;
 
     size_t count = 0;
     const models::BacktestTick* ticks = loader_.open_file(alpha_file_path, count);
 
     std::cout << "[backtest] Loaded " << count << " ticks from " << alpha_file_path << std::endl;
+    if (signals_)
+        std::cout << "[backtest] " << signals_->size() << " pre-computed signal bars available\n";
 
-    run(ticks, count);
+    run(ticks, count, signals);
 
     loader_.close_file();
     return aggregator_.compute();
 }
 
-BacktestResult SimRunner::run(const models::BacktestTick* ticks, size_t count) {
+BacktestResult SimRunner::run(const models::BacktestTick* ticks,
+                               size_t                      count,
+                               const SignalMap&             signals) {
+    signals_ = signals.empty() ? nullptr : &signals;
     if (ticks == nullptr || count == 0) return aggregator_.compute();
 
     const size_t batch = cfg_.batch_size;
@@ -79,8 +87,16 @@ void SimRunner::process_batch(const models::BacktestTick* batch, size_t n) {
         // Advance time frontier — prevents look-ahead in strategy
         clock_.advance(tick.timestamp_ns);
 
-        // Evaluate strategy
-        models::OrderIntent intent = strategy_(tick, clock_);
+        // Look up pre-computed signal for this bar (O(1) hash map lookup)
+        const models::BacktestSignal* sig = nullptr;
+        if (signals_) {
+            const uint64_t bar_ts = (tick.timestamp_ns / ONE_MINUTE_NS) * ONE_MINUTE_NS;
+            auto it = signals_->find(bar_ts);
+            if (it != signals_->end()) sig = &it->second;
+        }
+
+        // Evaluate strategy — receives signal (nullptr if unavailable)
+        models::OrderIntent intent = strategy_(tick, clock_, sig);
 
         // Execute if qty > 0 (qty=0 means "no action" from strategy)
         if (intent.qty != 0 && intent.side != 0) {

@@ -2,9 +2,19 @@
 
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <cstdint>
 #include <cstddef>
 #include <alpha/models/BacktestTick.hpp>
+#include <alpha/models/BacktestSignal.hpp>
+
+namespace alpha {
+namespace backtest {
+// Keyed by bar-open timestamp_ns (rounded to minute boundary).
+// Bar key = (tick.timestamp_ns / 60_000_000_000) * 60_000_000_000
+using SignalMap = std::unordered_map<uint64_t, models::BacktestSignal>;
+}
+}
 
 namespace alpha {
 namespace backtest {
@@ -97,6 +107,28 @@ public:
         uint64_t           start_ns,
         uint64_t           end_ns,
         const std::string& output_path);
+
+    // ── Signal loading (backtest_signals table) ────────────────────────────
+
+    /**
+     * Load pre-computed signals from QuestDB backtest_signals table.
+     * Written by signal_engine in --backtest-batch mode.
+     */
+    std::vector<models::BacktestSignal> load_signals_from_questdb(
+        const std::string& qdb_pg_dsn,
+        uint32_t           instrument_token,
+        uint64_t           start_ns,
+        uint64_t           end_ns);
+
+    /**
+     * Load signals as a timestamp-keyed map for O(1) join in SimRunner.
+     * Key = bar-open timestamp_ns = (row.timestamp_ns / 60_000_000_000) * 60_000_000_000
+     */
+    SignalMap load_signals_as_map(
+        const std::string& qdb_pg_dsn,
+        uint32_t           instrument_token,
+        uint64_t           start_ns,
+        uint64_t           end_ns);
 
 private:
     LoaderMode  mode_;

@@ -4,12 +4,14 @@
 #include <alpha/backtest/ResultAggregator.hpp>
 #include <alpha/models/BacktestTick.hpp>
 #include <alpha/models/MarketModels.hpp>
+#include "BacktestRedisPublisher.hpp"
 
 #include <iostream>
 #include <string>
 #include <vector>
 #include <cstdlib>
 #include <filesystem>
+#include <chrono>
 
 namespace fs = std::filesystem;
 
@@ -18,15 +20,15 @@ static std::string get_env(const char* key, const char* def = "") {
     return v ? v : def;
 }
 
-// ── Example momentum strategy (replace with real strategy engine hook) ────
+// ── Example signal-aware strategy ────────────────────────────────────────────
 //
-// This stub demonstrates the strategy callback signature.
-// In production, this calls into services/strategy_engine in Backtest_Mode.
-//
-// Simple logic: buy when price > vwap, sell when price < vwap.
-static alpha::models::OrderIntent momentum_strategy(
-    const alpha::models::BacktestTick& tick,
-    const alpha::backtest::BacktestClock& /*clock*/)
+// Uses pre-computed BacktestSignal (RSI + MACD) when available.
+// Falls back to VWAP deviation when signals are not yet warmed up.
+// In production, swap this lambda for a call into strategy_engine batch mode.
+static alpha::models::OrderIntent signal_strategy(
+    const alpha::models::BacktestTick&    tick,
+    const alpha::backtest::BacktestClock& /*clock*/,
+    const alpha::models::BacktestSignal*  sig)
 {
     alpha::models::OrderIntent intent{};
     intent.timestamp_ns     = tick.timestamp_ns;
@@ -34,31 +36,51 @@ static alpha::models::OrderIntent momentum_strategy(
     intent.price            = static_cast<double>(tick.last_price);
     intent.strategy_id      = 1;
 
-    float spread = tick.ask_price - tick.bid_price;
-
-    // Only trade if spread is reasonable (< 50 bps)
-    bool liquid = (tick.ask_price > 0.0f && spread / tick.last_price < 0.005f);
-
-    if (!liquid) {
-        // qty=0 signals "no action" to SimRunner
-        return intent;
+    // ── Signal-based logic (preferred when warmed up) ─────────────────────────
+    if (sig && sig->valid_rsi && sig->valid_macd) {
+        // RSI oversold + MACD bullish crossover → long entry
+        if (sig->rsi_14 < 35.0 && sig->macd_histogram > 0.0 && sig->macd_line < 0.0) {
+            intent.side       = 1;
+            intent.qty        = 1;
+            intent.reason     = 1;   // ENTRY
+            intent.confidence = std::min(1.0, (35.0 - sig->rsi_14) / 35.0 + 0.3);
+            return intent;
+        }
+        // RSI overbought + MACD bearish crossover → short/exit
+        if (sig->rsi_14 > 65.0 && sig->macd_histogram < 0.0 && sig->macd_line > 0.0) {
+            intent.side       = -1;
+            intent.qty        = 1;
+            intent.reason     = 2;   // EXIT
+            intent.confidence = std::min(1.0, (sig->rsi_14 - 65.0) / 35.0 + 0.3);
+            return intent;
+        }
+        // Bollinger band mean-reversion (when BB valid too)
+        if (sig->valid_bb) {
+            if (sig->bb_pct_b < 0.05) {          // Touching lower band
+                intent.side = 1; intent.qty = 1; intent.reason = 1;
+                intent.confidence = 0.5;
+                return intent;
+            }
+            if (sig->bb_pct_b > 0.95) {          // Touching upper band
+                intent.side = -1; intent.qty = 1; intent.reason = 2;
+                intent.confidence = 0.5;
+                return intent;
+            }
+        }
+        return intent;  // Signals valid but no actionable setup — no trade
     }
+
+    // ── Fallback: VWAP deviation (warmup period or no signals loaded) ─────────
+    const float spread = tick.ask_price - tick.bid_price;
+    const bool  liquid = (tick.ask_price > 0.0f && tick.last_price > 0.0f &&
+                          spread / tick.last_price < 0.005f);
+    if (!liquid) return intent;
 
     if (tick.last_price > tick.vwap * 1.0005f) {
-        // Price above VWAP — long signal
-        intent.side       = 1;
-        intent.qty        = 1;
-        intent.reason     = 1;   // ENTRY
-        intent.confidence = 0.6;
+        intent.side = 1; intent.qty = 1; intent.reason = 1; intent.confidence = 0.4;
     } else if (tick.last_price < tick.vwap * 0.9995f) {
-        // Price below VWAP — short/exit signal
-        intent.side       = -1;
-        intent.qty        = 1;
-        intent.reason     = 2;   // EXIT
-        intent.confidence = 0.6;
+        intent.side = -1; intent.qty = 1; intent.reason = 2; intent.confidence = 0.4;
     }
-    // else qty=0 → no action
-
     return intent;
 }
 
@@ -93,6 +115,12 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    // ── Redis publisher (non-blocking — failures are logged, not fatal) ──────
+    const std::string redis_host = get_env("REDIS_HOST", "redis");
+    const int         redis_port = std::stoi(get_env("REDIS_PORT", "6379"));
+    alpha::backtest::BacktestRedisPublisher publisher;
+    publisher.connect(redis_host, redis_port);
+
     // ── Mode: run backtest on all .alpha files in data_dir ────────────────
     alpha::backtest::SimConfig cfg;
     cfg.starting_capital  = std::stod(get_env("STARTING_CAPITAL", "1000000"));
@@ -117,6 +145,8 @@ int main(int argc, char* argv[]) {
     if (files.empty()) {
         std::cerr << "[backtest] No .alpha files found in " << data_dir
                   << ". Run with 'export' mode first." << std::endl;
+        publisher.publish_status(
+            alpha::backtest::BacktestRunState::BACKTEST_ERROR, 0, 0, 0, "", "No .alpha files found");
         return 1;
     }
 
@@ -124,15 +154,52 @@ int main(int argc, char* argv[]) {
 
     // Run backtest on each file (one instrument per file)
     for (const auto& file : files) {
-        std::cout << "[backtest] Running: " << fs::path(file).filename().string() << std::endl;
+        const std::string filename = fs::path(file).filename().string();
+        const std::string stem     = fs::path(file).stem().string();
+        std::cout << "[backtest] Running: " << filename << std::endl;
 
-        alpha::backtest::SimRunner runner(cfg, momentum_strategy);
+        uint32_t token = 0;
+        try { token = static_cast<uint32_t>(std::stoul(stem)); } catch (...) {}
+        const std::string symbol = "TOKEN_" + stem;
+
+        publisher.publish_status(
+            alpha::backtest::BacktestRunState::BACKTEST_LOADING,
+            token, 0, 0, symbol, "Loading ticks and signals");
+
+        alpha::backtest::SimRunner runner(cfg, signal_strategy);
 
         try {
-            alpha::backtest::BacktestResult result = runner.run(file);
+            // Load pre-computed signals from QuestDB (graceful fallback if absent)
+            alpha::backtest::SignalMap signals;
+            try {
+                if (token > 0) {
+                    alpha::backtest::TickLoader sig_loader(alpha::backtest::LoaderMode::QUESTDB_SQL);
+                    signals = sig_loader.load_signals_as_map(qdb_pg_dsn, token, 0, UINT64_MAX);
+                    std::cout << "[backtest] Loaded " << signals.size()
+                              << " signal bars for token " << token << std::endl;
+                }
+            } catch (...) {
+                std::cout << "[backtest] No pre-computed signals — running without signals\n";
+            }
+
+            publisher.publish_status(
+                alpha::backtest::BacktestRunState::BACKTEST_RUNNING,
+                token, 0, 0, symbol, "Simulation running");
+
+            alpha::backtest::BacktestResult result = runner.run(file, signals);
             result.print();
+
+            const double final_eq = cfg.starting_capital + result.total_net_pnl;
+            publisher.publish_result(result, token, symbol, cfg.starting_capital, final_eq);
+            publisher.publish_status(
+                alpha::backtest::BacktestRunState::BACKTEST_DONE,
+                token, 0, 0, symbol, "Completed");
+
         } catch (const std::exception& e) {
             std::cerr << "[backtest] ERROR on " << file << ": " << e.what() << std::endl;
+            publisher.publish_status(
+                alpha::backtest::BacktestRunState::BACKTEST_ERROR,
+                token, 0, 0, symbol, e.what());
         }
     }
 

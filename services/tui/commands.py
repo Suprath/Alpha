@@ -19,6 +19,11 @@ try:
 except ImportError:
     _PROTO_AVAILABLE = False
 
+try:
+    import alpha_backtest_pb2 as backtest_pb
+    _BACKTEST_PROTO_AVAILABLE = True
+except ImportError:
+    _BACKTEST_PROTO_AVAILABLE = False
 # ── Config ────────────────────────────────────────────────────────────────────
 
 REDIS_HOST    = os.getenv("REDIS_HOST",    "redis")
@@ -32,6 +37,7 @@ SERVICES: list[tuple[str, str]] = [
     ("data-feed",    "alpha-data-feed"),
     ("ingester",     "alpha-ingester"),
     ("signal-eng",   "alpha-signal-engine"),
+    ("sig-eng-bt",   "alpha-signal-engine-backtest"),
     ("strategy-eng", "alpha-strategy-engine"),
     ("market-eng",   "alpha-market-engine"),
     ("backfill",     "alpha-backfill-engine"),
@@ -546,6 +552,8 @@ def run_backtest(
                 "BROKERAGE_FLAT":   str(brokerage),
                 "SLIPPAGE_BPS":     str(slippage_bps),
                 "QUESTDB_HOST":     QUESTDB_HOST,
+                "REDIS_HOST":       REDIS_HOST,
+                "REDIS_PORT":       str(REDIS_PORT),
             },
             volumes={"alpha_backtest_data": {"bind": "/data/backtest", "mode": "rw"}},
             network=DOCKER_NETWORK,
@@ -556,3 +564,118 @@ def run_backtest(
         return c.short_id
     except Exception as e:
         return f"ERROR: {e}"
+
+
+def run_signal_engine_batch(
+    token: str,
+    symbol: str,
+    start_ns: int,
+    end_ns: int,
+) -> str:
+    """
+    Spin up alpha-signal-engine in --backtest-batch mode for one instrument.
+    Computes OHLCV signals and writes them to QuestDB backtest_signals table.
+    Blocks until complete. Returns container stdout or ERROR string.
+    """
+    try:
+        client = _docker()
+        cname  = f"alpha-signal-engine-batch-{token}"
+        try:
+            client.containers.get(cname).remove(force=True)
+        except Exception:
+            pass
+        output = client.containers.run(
+            "alpha-signal-engine:latest",
+            command=["--backtest-batch"],
+            environment={
+                "QUESTDB_HOST":               QUESTDB_HOST,
+                "QUESTDB_ILP_PORT":           "9009",
+                "BACKTEST_INSTRUMENT_TOKEN":  str(token),
+                "BACKTEST_SYMBOL":            symbol,
+                "BACKTEST_START_NS":          str(start_ns),
+                "BACKTEST_END_NS":            str(end_ns),
+            },
+            network=DOCKER_NETWORK,
+            name=cname,
+            remove=True,
+        )
+        return output.decode().strip() if output else f"[batch-signals] done for {symbol}"
+    except Exception as e:
+        return f"ERROR: {e}"
+
+
+def get_backtest_status() -> dict:
+    """
+    HGET alpha:backtest:status data → BacktestStatus proto.
+    Returns dict with state, progress, ticks_processed, etc.
+    """
+    if not _BACKTEST_PROTO_AVAILABLE:
+        return {}
+    try:
+        r = _redis()
+        raw = r.hget("alpha:backtest:status", b"data")
+        r.close()
+        if not raw:
+            return {}
+        s = backtest_pb.BacktestStatus()
+        s.ParseFromString(raw)
+        state_name = backtest_pb.BacktestRunState.Name(s.state)
+        return {
+            "state":            s.state,
+            "state_name":       state_name,
+            "instrument_token": s.instrument_token,
+            "ticks_processed":  s.ticks_processed,
+            "total_ticks":      s.total_ticks,
+            "progress_pct":     s.progress_pct,
+            "timestamp_ns":     s.timestamp_ns,
+            "symbol":           s.symbol,
+            "message":          s.message,
+        }
+    except Exception:
+        return {}
+
+
+def get_backtest_result() -> dict:
+    """
+    HGET alpha:backtest:result data → BacktestResultProto.
+    Returns dict with all performance metrics.
+    """
+    if not _BACKTEST_PROTO_AVAILABLE:
+        return {}
+    try:
+        r = _redis()
+        raw = r.hget("alpha:backtest:result", b"data")
+        r.close()
+        if not raw:
+            return {}
+        res = backtest_pb.BacktestResultProto()
+        res.ParseFromString(raw)
+        return {
+            "total_net_pnl":    res.total_net_pnl,
+            "total_gross_pnl":  res.total_gross_pnl,
+            "total_commission": res.total_commission,
+            "starting_capital": res.starting_capital,
+            "final_equity":     res.final_equity,
+            "total_return_pct": res.total_return_pct,
+            "sharpe_ratio":     res.sharpe_ratio,
+            "sortino_ratio":    res.sortino_ratio,
+            "calmar_ratio":     res.calmar_ratio,
+            "max_drawdown":     res.max_drawdown,
+            "max_drawdown_pct": res.max_drawdown_pct,
+            "total_trades":     res.total_trades,
+            "winning_trades":   res.winning_trades,
+            "losing_trades":    res.losing_trades,
+            "win_rate":         res.win_rate,
+            "profit_factor":    res.profit_factor,
+            "avg_trade_pnl":    res.avg_trade_pnl,
+            "avg_win":          res.avg_win,
+            "avg_loss":         res.avg_loss,
+            "largest_win":      res.largest_win,
+            "largest_loss":     res.largest_loss,
+            "expectancy":       res.expectancy,
+            "instrument_token": res.instrument_token,
+            "symbol":           res.symbol,
+            "run_timestamp_ns": res.run_timestamp_ns,
+        }
+    except Exception:
+        return {}

@@ -1,5 +1,6 @@
 #include "PortfolioManager.hpp"
 #include "../core/MarginModel.hpp"
+#include <cstdio>
 #include <iostream>
 #include <iomanip>
 #include <stdexcept>
@@ -49,7 +50,7 @@ bool PortfolioManager::apply_trade(const Trade& trade) {
     if (pos.qty == 0) {
         // Initializing a new position slot
         pos.instrument_token = trade.instrument_token;
-        std::strncpy(pos.symbol, trade.symbol, sizeof(pos.symbol) - 1);
+        std::snprintf(pos.symbol, sizeof(pos.symbol), "%s", trade.symbol);
         pos.segment  = trade.segment;
         pos.lot_size = trade.lot_size;
     }
@@ -64,8 +65,6 @@ bool PortfolioManager::apply_trade(const Trade& trade) {
     // Release existing margin for this instrument, re-compute for new position
     // (simplified: track per-position margin separately)
     // TODO: precise margin release on partial close — approximate here
-    auto new_margin = compute_margin(trade.segment, 1,
-                                     std::abs(pos.qty), trade.fill_price, trade.lot_size);
     // Rough margin update: recalculate from scratch based on new position size
     if (pos.is_flat()) {
         // Released — no margin needed

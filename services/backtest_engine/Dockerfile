@@ -6,8 +6,12 @@ LABEL stage=builder
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
-    libpqxx-dev \
     pkg-config \
+    libpqxx-dev \
+    libhiredis-dev \
+    protobuf-compiler \
+    libprotobuf-dev \
+    libgtest-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -17,12 +21,15 @@ WORKDIR /app/services/backtest_engine
 RUN mkdir -p build
 WORKDIR /app/services/backtest_engine/build
 RUN cmake .. && make -j$(nproc)
+RUN ./alpha-backtest-test
 
 # ── Runtime Stage ─────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y \
-    libpqxx-dev \
+    libpqxx-6.4 \
+    libhiredis0.14 \
+    libprotobuf32 \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 

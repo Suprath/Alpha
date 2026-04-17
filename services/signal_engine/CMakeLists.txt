@@ -8,9 +8,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include_directories(include)
 include_directories(../../shared/cpp/include)
 
-# Boost (Interprocess) Let's find Boost using the system libraries
+# Boost (Interprocess)
 find_package(Boost REQUIRED)
 include_directories(${Boost_INCLUDE_DIRS})
+
+# libpqxx — used by backtest-batch mode to read candles from QuestDB
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(pqxx REQUIRED libpqxx)
+include_directories(${pqxx_INCLUDE_DIRS})
 
 # Main Binary
 add_executable(alpha-signal-engine
@@ -32,6 +37,7 @@ target_include_directories(alpha-signal-engine PRIVATE
 target_link_libraries(alpha-signal-engine PRIVATE
     pthread
     rt
+    ${pqxx_LIBRARIES}
 )
 
 # Testing — all signal calculators are header-only; no extra .cpp sources needed

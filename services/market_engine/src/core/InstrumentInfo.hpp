@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string_view>
 #include <unordered_map>
@@ -94,7 +95,7 @@ public:
 
         InstrumentInfo info{};
         info.token = token;
-        std::strncpy(info.symbol, symbol, sizeof(info.symbol) - 1);
+        std::snprintf(info.symbol, sizeof(info.symbol), "%s", symbol);
         info.segment     = infer_segment(symbol);
         info.option_type = OptionType::NONE;
         info.expiry_ns   = 0;

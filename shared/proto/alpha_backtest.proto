@@ -1,0 +1,67 @@
+syntax = "proto3";
+package alpha.backtest;
+
+// ── Backtest pipeline status + results ───────────────────────────────────────
+// Transport:  Redis Hash  alpha:backtest:status  field "data" (BacktestStatus)
+//             Redis Hash  alpha:backtest:result   field "data" (BacktestResultProto)
+//             Redis Stream alpha:backtest:results MAXLEN 20   (run history)
+//
+// Producer:   services/backtest_engine (C++)
+// Consumer:   services/tui (Python, panels.py BacktestResultsPanel)
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum BacktestRunState {
+    BACKTEST_IDLE    = 0;
+    BACKTEST_LOADING = 1;   // Loading ticks + signals from QuestDB
+    BACKTEST_RUNNING = 2;   // Hot loop in progress
+    BACKTEST_DONE    = 3;   // Completed successfully
+    BACKTEST_ERROR   = 4;   // Fatal error
+}
+
+message BacktestStatus {
+    BacktestRunState state             = 1;
+    uint32           instrument_token  = 2;
+    uint64           ticks_processed   = 3;
+    uint64           total_ticks       = 4;
+    double           progress_pct      = 5;  // 0.0 – 100.0
+    uint64           timestamp_ns      = 6;  // Wall-clock time of this update
+    string           symbol            = 7;
+    string           message           = 8;  // Error text or phase description
+}
+
+message BacktestResultProto {
+    // ── P&L ─────────────────────────────────────────────────────────────────
+    double   total_net_pnl       = 1;
+    double   total_gross_pnl     = 2;
+    double   total_commission    = 3;
+    double   starting_capital    = 4;
+    double   final_equity        = 5;
+    double   total_return_pct    = 6;   // (final_equity - starting_capital) / starting_capital * 100
+
+    // ── Risk-adjusted returns ────────────────────────────────────────────────
+    double   sharpe_ratio        = 7;
+    double   sortino_ratio       = 8;
+    double   calmar_ratio        = 9;
+
+    // ── Drawdown ─────────────────────────────────────────────────────────────
+    double   max_drawdown        = 10;
+    double   max_drawdown_pct    = 11;
+
+    // ── Trade statistics ──────────────────────────────────────────────────────
+    uint64   total_trades        = 12;
+    uint64   winning_trades      = 13;
+    uint64   losing_trades       = 14;
+    double   win_rate            = 15;
+    double   profit_factor       = 16;
+    double   avg_trade_pnl       = 17;
+    double   avg_win             = 18;
+    double   avg_loss            = 19;
+    double   largest_win         = 20;
+    double   largest_loss        = 21;
+    double   expectancy          = 22;
+
+    // ── Run metadata ──────────────────────────────────────────────────────────
+    uint32   instrument_token    = 23;
+    string   symbol              = 24;
+    uint64   run_timestamp_ns    = 25;   // When the run completed
+}
