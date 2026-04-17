@@ -244,6 +244,55 @@ Button.secondary:hover {
     margin-bottom: 1;
 }
 
+/* ── Taller dialog variant (BacktestModal) ───────────────────────*/
+.modal-dialog-tall {
+    background: #161b22;
+    border: thick #30363d;
+    padding: 1 2;
+    width: 68;
+    height: auto;
+    max-height: 52;
+}
+
+/* ── BacktestModal layout ────────────────────────────────────────*/
+#bt-dialog {
+    background: #161b22;
+    border: thick #30363d;
+    padding: 1 2;
+    width: 66;
+    height: auto;
+    max-height: 42;
+    layout: vertical;
+}
+
+/* Scrollable form body — inputs scroll, buttons stay pinned */
+#bt-form {
+    height: auto;
+    max-height: 22;
+    overflow-y: auto;
+    scrollbar-color: #30363d #0d1117;
+    padding-right: 1;
+}
+
+/* Button row — always visible below the form */
+#bt-buttons {
+    height: 3;
+    align: right middle;
+    padding-top: 1;
+    border-top: solid #21262d;
+    margin-top: 1;
+}
+
+/* Progress/output area */
+#bt-output {
+    color: #e6edf3;
+    margin-top: 1;
+    height: auto;
+    max-height: 12;
+    overflow-y: auto;
+    scrollbar-color: #30363d #0d1117;
+}
+
 /* ── Result/output panel inside modals ───────────────────────────*/
 #modal-output {
     background: #0d1117;

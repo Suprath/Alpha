@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import redis as syncredis
 import docker as dockersdk
@@ -293,6 +293,96 @@ def run_historical_backfill(
             remove=False,
         )
         return c.short_id
+    except Exception as e:
+        return f"ERROR: {e}"
+
+
+def get_container_info(name: str) -> dict:
+    """Return {status, exit_code} for a container. status='absent' if not found."""
+    try:
+        client = _docker()
+        c = client.containers.get(name)
+        c.reload()
+        state = c.attrs.get("State", {})
+        return {
+            "status":    state.get("Status", "unknown"),
+            "exit_code": state.get("ExitCode", -1),
+        }
+    except Exception:
+        return {"status": "absent", "exit_code": -1}
+
+
+def run_populate_backtest_ticks() -> str:
+    """
+    Run populate_backtest_ticks.py inside the data-feed image.
+    Transforms QuestDB candles → backtest_ticks table (blocking).
+    Returns container stdout or an ERROR string.
+    """
+    try:
+        client = _docker()
+        cname  = "alpha-populate-bt-tui"
+        try:
+            client.containers.get(cname).remove(force=True)
+        except Exception:
+            pass
+        output = client.containers.run(
+            "alpha-data-feed:latest",
+            command=["python", "populate_backtest_ticks.py"],
+            environment={
+                "POSTGRES_HOST":    POSTGRES_HOST,
+                "POSTGRES_PORT":    "5432",
+                "POSTGRES_DB":      "alpha_db",
+                "POSTGRES_USER":    "alpha_user",
+                "POSTGRES_PASSWORD": "alpha_password",
+                "QUESTDB_HOST":     QUESTDB_HOST,
+                "QUESTDB_ILP_PORT": "9009",
+            },
+            network=DOCKER_NETWORK,
+            name=cname,
+            remove=True,   # detach=False → blocks until done
+        )
+        return output.decode().strip() if output else "done"
+    except Exception as e:
+        return f"ERROR: {e}"
+
+
+def date_to_start_ns(date_str: str) -> int:
+    """'YYYY-MM-DD' → UTC midnight epoch nanoseconds (inclusive start)."""
+    dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1_000_000_000)
+
+
+def date_to_end_ns(date_str: str) -> int:
+    """'YYYY-MM-DD' → next-day UTC midnight nanoseconds (exclusive end)."""
+    dt = (
+        datetime.strptime(date_str, "%Y-%m-%d") + timedelta(days=1)
+    ).replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1_000_000_000)
+
+
+def export_instrument_to_alpha(token: str, start_ns: int, end_ns: int) -> str:
+    """
+    Run backtest-engine in export mode for one instrument token.
+    Writes /data/backtest/<token>.alpha into the alpha_backtest_data volume.
+    Blocks until the container exits and returns its stdout (or an error string).
+    """
+    try:
+        client = _docker()
+        cname  = f"alpha-backtest-export-{token}"
+        try:
+            client.containers.get(cname).remove(force=True)
+        except Exception:
+            pass
+        output = client.containers.run(
+            "alpha-backtest-engine:latest",
+            command=["export", str(token), str(start_ns), str(end_ns), "/data/backtest"],
+            environment={"QUESTDB_HOST": QUESTDB_HOST},
+            volumes={"alpha_backtest_data": {"bind": "/data/backtest", "mode": "rw"}},
+            network=DOCKER_NETWORK,
+            name=cname,
+            remove=True,   # detach=False (default) → blocks until done
+        )
+        return output.decode().strip() if output else f"exported {token}.alpha"
     except Exception as e:
         return f"ERROR: {e}"
 

@@ -10,6 +10,7 @@ modals.py — All modal screens for the Alpha Terminal UI.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
@@ -28,7 +29,12 @@ from commands import (
     inject_test_tick,
     run_historical_backfill,
     run_backtest,
+    export_instrument_to_alpha,
+    date_to_start_ns,
+    date_to_end_ns,
     get_container_logs,
+    get_container_info,
+    run_populate_backtest_ticks,
 )
 
 B   = "#58a6ff"
@@ -301,76 +307,239 @@ class BackfillModal(ModalScreen):
 # ── Backtest Modal ─────────────────────────────────────────────────────────────
 
 class BacktestModal(ModalScreen):
-    """Configure and run the backtest engine."""
+    """
+    Configure and run the full backtest pipeline automatically.
+
+    Workflow (fully automated, no manual steps):
+      1. Backfill any missing data for the requested date range (smart skip if present)
+      2. Populate backtest_ticks from QuestDB candles
+      3. Export each instrument to .alpha binary
+      4. Launch simulation and stream initial output
+    """
 
     BINDINGS = [("escape", "dismiss", "Close")]
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="modal-dialog"):
+        from datetime import date as _date
+        today     = _date.today().strftime("%Y-%m-%d")
+        month_ago = (_date.today().replace(day=1)).strftime("%Y-%m-%d")
+
+        with Vertical(id="bt-dialog"):
             yield Label(f"[bold {B}]Run Backtest[/]", id="modal-title")
 
-            yield Label("Starting capital (₹)", classes="modal-label")
-            yield Input(value="1000000", id="inp-capital", classes="modal-input")
+            # ── Scrollable form body ──────────────────────────────────────────
+            with Vertical(id="bt-form"):
+                yield Label("From date (YYYY-MM-DD)", classes="modal-label")
+                yield Input(value=month_ago, id="inp-bt-from", classes="modal-input",
+                            placeholder="2024-01-01")
 
-            yield Label("Brokerage per leg (₹)", classes="modal-label")
-            yield Input(value="20", id="inp-brokerage", classes="modal-input")
+                yield Label("To date (YYYY-MM-DD)", classes="modal-label")
+                yield Input(value=today, id="inp-bt-to", classes="modal-input",
+                            placeholder="2024-12-31")
 
-            yield Label("Slippage (bps)", classes="modal-label")
-            yield Input(value="2", id="inp-slippage", classes="modal-input")
+                yield Label("Starting capital (₹)", classes="modal-label")
+                yield Input(value="1000000", id="inp-capital", classes="modal-input")
 
-            yield Label(
-                f"[{GR}]Note: .alpha files in the backtest volume are used.\n"
-                f"Run a backfill first, then use 'backtest export' to generate them.[/]",
-                classes="modal-label"
-            )
+                yield Label("Brokerage per leg (₹)", classes="modal-label")
+                yield Input(value="20", id="inp-brokerage", classes="modal-input")
 
-            with Horizontal(id="modal-buttons"):
-                yield Button("✕ Cancel", id="btn-cancel", classes="secondary")
-                yield Button("▶ Run",    id="btn-run",    classes="primary")
+                yield Label("Slippage (bps)", classes="modal-label")
+                yield Input(value="2", id="inp-slippage", classes="modal-input")
 
-            yield Static("", id="modal-output")
+                yield Label(
+                    f"[{GR}]{', '.join(TOKEN_SYMBOLS.values())}\n"
+                    f"Missing data auto-backfilled before simulation.[/]",
+                    classes="modal-label",
+                )
+
+            # ── Always-visible footer: buttons + progress ─────────────────────
+            with Horizontal(id="bt-buttons"):
+                yield Button("✕ Cancel",  id="btn-cancel", classes="secondary")
+                yield Button("▶ Run All", id="btn-run",    classes="primary")
+
+            yield Static("", id="bt-output")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-cancel":
             self.dismiss()
             return
+        self.query_one("#btn-run", Button).disabled = True
         asyncio.ensure_future(self._run())
 
+    def _update(self, lines: list[str]) -> None:
+        # Always show the LAST 10 lines so current step stays visible
+        # (Static doesn't scroll — older lines are clipped at top)
+        self.query_one("#bt-output", Static).update("\n".join(lines[-10:]))
+
     async def _run(self) -> None:
-        out = self.query_one("#modal-output", Static)
+        loop = asyncio.get_event_loop()
+
+        # ── Parse inputs ──────────────────────────────────────────────────────
+        from_date = self.query_one("#inp-bt-from",   Input).value.strip()
+        to_date   = self.query_one("#inp-bt-to",     Input).value.strip()
 
         try:
-            capital    = float(self.query_one("#inp-capital",   Input).value or 1_000_000)
-            brokerage  = float(self.query_one("#inp-brokerage", Input).value or 20)
-            slippage   = float(self.query_one("#inp-slippage",  Input).value or 2)
+            datetime.strptime(from_date, "%Y-%m-%d")
+            datetime.strptime(to_date,   "%Y-%m-%d")
         except ValueError:
-            out.update(f"[{R}]Invalid number — check inputs.[/]")
+            self._update([f"[{R}]Invalid date format — use YYYY-MM-DD.[/]"])
+            self.query_one("#btn-run", Button).disabled = False
             return
 
-        out.update(f"[{GR}]Launching backtest container…[/]")
-        loop = asyncio.get_event_loop()
-        cid  = await loop.run_in_executor(
-            None,
-            lambda: run_backtest(capital, brokerage, slippage)
-        )
+        if from_date > to_date:
+            self._update([f"[{R}]From date must be before To date.[/]"])
+            self.query_one("#btn-run", Button).disabled = False
+            return
 
+        try:
+            capital   = float(self.query_one("#inp-capital",   Input).value or 1_000_000)
+            brokerage = float(self.query_one("#inp-brokerage", Input).value or 20)
+            slippage  = float(self.query_one("#inp-slippage",  Input).value or 2)
+        except ValueError:
+            self._update([f"[{R}]Invalid number in simulation params.[/]"])
+            self.query_one("#btn-run", Button).disabled = False
+            return
+
+        start_ns = date_to_start_ns(from_date)
+        end_ns   = date_to_end_ns(to_date)
+        tokens   = list(TOKEN_SYMBOLS.items())
+        lines: list[str] = []
+
+        def abort(msg: str) -> None:
+            lines.append(f"[{R}]{msg}[/]")
+            self._update(lines)
+            self.query_one("#btn-run", Button).disabled = False
+
+        # ── Step 1: backfill missing data ─────────────────────────────────────
+        # historical_feed.py already checks existing candles per chunk and skips
+        # dates already present — so this is a no-op when data is up to date.
+        lines += [
+            f"[{B}]Step 1/4 — Backfill (auto-skip if data present)[/]",
+            f"[{GR}]{from_date} → {to_date}  starting container…[/]",
+        ]
+        self._update(lines)
+
+        cid = await loop.run_in_executor(
+            None, lambda: run_historical_backfill(from_date, to_date)
+        )
         if cid.startswith("ERROR"):
-            out.update(f"[{R}]{cid}[/]")
-        else:
-            out.update(
-                f"[{G}]Container started: {cid}[/]\n"
-                f"[{GR}]capital=₹{capital:,.0f}  brok=₹{brokerage}  slip={slippage}bps\n"
-                f"Monitor: docker logs alpha-backtest-tui -f[/]"
+            return abort(f"Backfill launch failed: {cid}")
+
+        lines[-1] = f"[{GR}]Container {cid} — waiting for completion…[/]"
+        self._update(lines)
+
+        dots = 0
+        while True:
+            await asyncio.sleep(2)
+            info = await loop.run_in_executor(
+                None, lambda: get_container_info("alpha-data-feed-historical-tui")
             )
-            # Stream backtest output into the modal
-            await asyncio.sleep(2.0)
-            loop2 = asyncio.get_event_loop()
-            logs  = await loop2.run_in_executor(
-                None,
-                lambda: get_container_logs("alpha-backtest-tui", tail=60)
+            status = info.get("status", "absent")
+            if status in ("exited", "dead", "absent"):
+                ec = info.get("exit_code", -1)
+                if ec == 0:
+                    lines[-1] = f"[{G}]✓ Backfill done[/]"
+                    self._update(lines)
+                    break
+                else:
+                    # Fetch last few log lines to surface the error
+                    err_logs = await loop.run_in_executor(
+                        None,
+                        lambda: get_container_logs("alpha-data-feed-historical-tui", tail=5),
+                    )
+                    lines[-1] = f"[{R}]✗ Backfill exit {ec}[/]"
+                    if err_logs.strip():
+                        lines.append(f"[{R}]{err_logs.strip()[-300:]}[/]")
+                    return abort("Aborting pipeline.")
+            dots = (dots % 3) + 1
+            lines[-1] = f"[{GR}]Backfill {status}{'.' * dots}[/]"
+            self._update(lines)
+
+        # ── Step 2: populate backtest_ticks ───────────────────────────────────
+        lines += ["", f"[{B}]Step 2/4 — Populating backtest_ticks[/]",
+                  f"[{GR}]QuestDB candles → backtest_ticks…[/]"]
+        self._update(lines)
+
+        result = await loop.run_in_executor(None, run_populate_backtest_ticks)
+        if result.startswith("ERROR"):
+            lines[-1] = f"[{R}]✗ {result}[/]"
+            return abort("Aborting pipeline.")
+        lines[-1] = f"[{G}]✓ backtest_ticks ready[/]"
+        self._update(lines)
+
+        # ── Step 3: export .alpha files ───────────────────────────────────────
+        lines += ["", f"[{B}]Step 3/4 — Exporting .alpha files[/]"]
+        self._update(lines)
+
+        for i, (tok, sym) in enumerate(tokens, 1):
+            lines.append(f"[{GR}]  [{i}/{len(tokens)}] {sym:<12} exporting…[/]")
+            self._update(lines)
+
+            result = await loop.run_in_executor(
+                None, lambda t=tok: export_instrument_to_alpha(t, start_ns, end_ns)
             )
-            if logs.strip():
-                out.update(
-                    f"[{G}]Container: {cid}[/]\n"
-                    f"[{W}]{logs[:800]}[/]"
-                )
+            if result.startswith("ERROR"):
+                lines[-1] = f"[{R}]  [{i}/{len(tokens)}] {sym:<12} ✗ {result}[/]"
+                return abort("Export failed — aborting.")
+
+            tick_info = next(
+                (f"{int(w):,} ticks" for w in result.split() if w.isdigit()), ""
+            )
+            lines[-1] = f"[{G}]  [{i}/{len(tokens)}] {sym:<12} ✓  {tick_info}[/]"
+            self._update(lines)
+
+        lines.append(f"[{G}]All exports done.[/]")
+        self._update(lines)
+
+        # ── Step 4: run simulation ────────────────────────────────────────────
+        lines += ["", f"[{B}]Step 4/4 — Launching simulation…[/]"]
+        self._update(lines)
+
+        cid = await loop.run_in_executor(
+            None, lambda: run_backtest(capital, brokerage, slippage)
+        )
+        if cid.startswith("ERROR"):
+            return abort(f"Failed to start backtest: {cid}")
+
+        lines.append(
+            f"[{G}]✓ Started: {cid}[/]  "
+            f"[{GR}]₹{capital:,.0f}  brok=₹{brokerage}  slip={slippage}bps[/]"
+        )
+        self._update(lines)
+
+        # Poll until the backtest container exits (typically < 1 second)
+        dots = 0
+        while True:
+            await asyncio.sleep(0.5)
+            info = await loop.run_in_executor(
+                None, lambda: get_container_info("alpha-backtest-tui")
+            )
+            status = info.get("status", "absent")
+            if status in ("exited", "dead", "absent"):
+                ec = info.get("exit_code", -1)
+                if ec == 0:
+                    lines[-1] = f"[{G}]✓ Simulation complete[/]"
+                else:
+                    lines[-1] = f"[{R}]✗ Simulation exit {ec}[/]"
+                self._update(lines)
+                break
+            dots = (dots % 3) + 1
+            lines[-1] = (
+                f"[{G}]✓ Started: {cid}[/]  "
+                f"[{GR}]simulating{'.' * dots}[/]"
+            )
+            self._update(lines)
+
+        # Fetch and display results — escape [ ] to avoid Rich markup conflicts
+        logs = await loop.run_in_executor(
+            None, lambda: get_container_logs("alpha-backtest-tui", tail=30)
+        )
+        if logs.strip():
+            # Strip timestamps, escape brackets so Rich doesn't misparse [backtest] etc.
+            clean = "\n".join(
+                l.split("Z ", 1)[-1] if "Z " in l else l
+                for l in logs.strip().splitlines()
+            )
+            safe = clean[-600:].replace("[", "\\[")
+            lines += [f"[{GR}]── results ──[/]", f"[dim]{safe}[/dim]"]
+            self._update(lines)

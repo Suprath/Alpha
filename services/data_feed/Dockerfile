@@ -32,6 +32,7 @@ COPY --from=proto-builder /app/market_data_v3_pb2.py .
 COPY services/data_feed/main.py .
 COPY services/data_feed/live_feed.py .
 COPY services/data_feed/historical_feed.py .
+COPY services/data_feed/populate_backtest_ticks.py .
 
 # MODE=live (default) | historical
 ENV MODE=live
