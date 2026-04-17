@@ -45,21 +45,36 @@ def _load_token_map() -> dict[str, int]:
     pg_user = os.getenv("POSTGRES_USER",  "alpha_user")
     pg_pass = os.getenv("POSTGRES_PASSWORD", "alpha_password")
 
-    conn = psycopg2.connect(
-        host=pg_host, port=pg_port, dbname=pg_db,
-        user=pg_user, password=pg_pass,
-    )
     try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT instrument_key, id FROM instrument_universe "
-            "WHERE date = (SELECT MAX(date) FROM instrument_universe)"
+        conn = psycopg2.connect(
+            host=pg_host, port=pg_port, dbname=pg_db,
+            user=pg_user, password=pg_pass,
         )
-        token_map = {row[0]: row[1] for row in cur.fetchall()}
-        logger.info("[main] token_map: %d instruments loaded from PostgreSQL", len(token_map))
-        return token_map
-    finally:
-        conn.close()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT instrument_key, id FROM instrument_universe "
+                "WHERE date = (SELECT MAX(date) FROM instrument_universe)"
+            )
+            token_map = {row[0]: row[1] for row in cur.fetchall()}
+            logger.info("[main] token_map: %d instruments loaded from PostgreSQL", len(token_map))
+            if token_map:
+                return token_map
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("[main] PostgreSQL unavailable: %s", e)
+
+    # Fallback: derive token IDs from INGEST_SYMBOLS so ticks are never dropped
+    # even when instrument-worker hasn't run yet today.
+    symbols = [k.strip() for k in os.getenv("INGEST_SYMBOLS", "").split(",") if k.strip()]
+    fallback = {sym: i + 1 for i, sym in enumerate(symbols)}
+    logger.warning(
+        "[main] token_map fallback — using sequential IDs for %d instruments from INGEST_SYMBOLS "
+        "(run instrument-worker to get real DB ids)",
+        len(fallback),
+    )
+    return fallback
 
 
 async def run_live() -> None:

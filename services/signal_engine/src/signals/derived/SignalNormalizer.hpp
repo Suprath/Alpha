@@ -36,11 +36,11 @@ static constexpr uint32_t NORM_WINDOW = 252u; // 1 trading year of 1-min bars
 struct NormalizedBundle {
     uint32_t instrument_token;
     uint64_t timestamp_ns;
-    std::array<double, NUM_SIGNALS> z;       // ŝ_k(t) — z-scored signal values
-    std::array<double, NUM_SIGNALS> mu;      // rolling mean  μ_k
-    std::array<double, NUM_SIGNALS> sigma;   // rolling std   σ_k
-    std::array<bool,   NUM_SIGNALS> valid;   // false until ≥2 observations
-    uint32_t n;                              // observations in window (up to 252)
+    std::array<double, SIGNAL_CAPACITY> z;       // ŝ_k(t) — z-scored signal values
+    std::array<double, SIGNAL_CAPACITY> mu;      // rolling mean  μ_k
+    std::array<double, SIGNAL_CAPACITY> sigma;   // rolling std   σ_k
+    std::array<bool,   SIGNAL_CAPACITY> valid;   // false until ≥2 observations
+    uint32_t n;                                  // observations in window (up to 252)
 };
 
 // ─── Per-(instrument, signal) rolling state ───────────────────────────────────
@@ -54,7 +54,7 @@ struct NormSignalState {
 };
 
 struct InstrumentNormState {
-    std::array<NormSignalState, NUM_SIGNALS> signals;
+    std::array<NormSignalState, SIGNAL_CAPACITY> signals;
 };
 
 // ─── Signal Normalizer ────────────────────────────────────────────────────────

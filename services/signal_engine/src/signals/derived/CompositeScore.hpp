@@ -3,7 +3,7 @@
  * @brief IC-weighted composite score, signal quality, and Kelly position sizing.
  *
  * Composite Score:
- *   Score(t) = Σ_{k=1}^{8} w_k · ŝ_k(t)
+ *   Score(t) = Σ_{k=0}^{NUM_SIGNALS-1} w_k · ŝ_k(t)
  *   w_k      = IC_k / Σ_j IC_j          (Information Coefficient weights)
  *   ŝ_k      = normalized signal from SignalNormalizer
  *
@@ -26,9 +26,9 @@
 #pragma once
 
 #include "SignalBundle.hpp"
+#include "SignalNormalizer.hpp"
 #include <cmath>    // std::exp, std::abs
 #include <array>
-#include <numeric>  // std::accumulate
 
 namespace alpha::signal::signals::derived {
 
@@ -46,7 +46,7 @@ struct CompositeScoreResult {
     double   p_win;          // p = sigmoid(Score) ∈ (0, 1)
     double   kelly_full;     // f* = (p(b+1) - 1) / b
     double   kelly_half;     // f  = f* / 2, clamped to [0, 1]
-    std::array<double, NUM_SIGNALS> weights; // w_k used this computation
+    std::array<double, SIGNAL_CAPACITY> weights; // w_k used this computation
     bool     valid;          // false until all signals are valid
 };
 
@@ -65,7 +65,7 @@ public:
      *        Weights are recomputed immediately as w_k = IC_k / Σ IC_j.
      *        Negative ICs are zeroed (only positive predictive power counts).
      */
-    void set_ic_weights(const std::array<double, NUM_SIGNALS>& ic_values) {
+    void set_ic_weights(const std::array<double, SIGNAL_CAPACITY>& ic_values) {
         ic_ = ic_values;
         recompute_weights();
     }
@@ -134,15 +134,17 @@ private:
             if (ic_[k] < 0.0) ic_[k] = 0.0;
             sum += ic_[k];
         }
+        weights_.fill(0.0); // clear all including unused capacity slots
         if (sum > 0.0) {
             for (uint32_t k = 0; k < NUM_SIGNALS; ++k) weights_[k] = ic_[k] / sum;
         } else {
-            weights_.fill(1.0 / NUM_SIGNALS); // fallback: equal weights
+            // fallback: equal weights for active signals only
+            for (uint32_t k = 0; k < NUM_SIGNALS; ++k) weights_[k] = 1.0 / NUM_SIGNALS;
         }
     }
 
-    std::array<double, NUM_SIGNALS> ic_      = {};
-    std::array<double, NUM_SIGNALS> weights_ = {};
+    std::array<double, SIGNAL_CAPACITY> ic_      = {};
+    std::array<double, SIGNAL_CAPACITY> weights_ = {};
     double                          b_       = DEFAULT_WIN_LOSS;
 };
 

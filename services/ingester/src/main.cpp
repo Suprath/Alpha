@@ -1,18 +1,18 @@
 /**
- * Alpha Ingester v2 — Redis Stream → Shared Memory Bridge
+ * Alpha Ingester — Redis Stream → Shared Memory Bridge
  * ─────────────────────────────────────────────────────────────────────────────
- * Reads tick dicts published by the Python data_feed (live_feed.py) from the
- * Redis Stream "alpha:ticks" and pushes them as Tick structs into the POSIX
- * shared memory ring buffer consumed by the Signal Engine.
- *
- * This replaces the prior monolithic C++ Upstox WebSocket + protobuf client
- * with a thin, dependency-light bridge.  All Upstox protocol complexity now
- * lives in the Python data_feed service.
+ * Reads alpha.feed.Tick protobuf messages published by the Python data_feed
+ * service from the Redis Stream "alpha:ticks" and pushes them as Tick structs
+ * into the POSIX shared memory ring buffer consumed by the Signal Engine.
  *
  * Data flow:
- *   Python live_feed.py → XADD alpha:ticks → [this process] → SHM ring buffer
- *                                                                     ↓
- *                                                            Signal Engine (C++)
+ *   Python live_feed.py
+ *     → XADD alpha:ticks * data <serialized alpha.feed.Tick bytes>
+ *       → [this process] deserialises proto → maps to models::Tick
+ *         → SHM ring buffer
+ *           → Signal Engine (C++)
+ *
+ * Schema contract: shared/proto/alpha_tick.proto
  */
 
 #include <iostream>
@@ -25,6 +25,8 @@
 #include <chrono>
 
 #include <hiredis/hiredis.h>
+
+#include "alpha_tick.pb.h"               // generated from shared/proto/alpha_tick.proto
 
 #include <alpha/config/Config.hpp>
 #include <alpha/ipc/ShmManager.hpp>
@@ -39,55 +41,62 @@ static std::atomic<bool> g_running{true};
 
 static void signal_handler(int) { g_running.store(false, std::memory_order_relaxed); }
 
-// ── Redis field helpers ───────────────────────────────────────────────────────
+// ── Redis binary field helper ─────────────────────────────────────────────────
 
-/** Return the value for `key` in a flat Redis reply array [k, v, k, v, ...]. */
-static const char* field_val(redisReply* arr, const char* key) {
+/**
+ * Find field `key` in a flat Redis reply array [k, v, k, v, ...] and return
+ * a pointer + byte length to the value. Returns false if not found.
+ *
+ * IMPORTANT: use `out_len`, not strlen(), when passing to protobuf ParseFromArray.
+ * Binary proto payloads may contain embedded null bytes.
+ */
+static bool field_bin(redisReply* arr, const char* key,
+                      const char*& out_ptr, size_t& out_len) {
     for (size_t i = 0; i + 1 < arr->elements; i += 2) {
-        if (arr->element[i]->str && std::strcmp(arr->element[i]->str, key) == 0) {
-            return arr->element[i + 1]->str;
+        if (arr->element[i]->str &&
+            std::strcmp(arr->element[i]->str, key) == 0) {
+            out_ptr = arr->element[i + 1]->str;
+            out_len = arr->element[i + 1]->len;
+            return true;
         }
     }
-    return nullptr;
+    return false;
 }
 
-static inline double   r_dbl(redisReply* a, const char* k) { auto* s = field_val(a, k); return s ? std::strtod(s, nullptr)                    : 0.0; }
-static inline uint64_t r_u64(redisReply* a, const char* k) { auto* s = field_val(a, k); return s ? static_cast<uint64_t>(std::strtoull(s, nullptr, 10)) : 0ULL; }
-static inline uint32_t r_u32(redisReply* a, const char* k) { auto* s = field_val(a, k); return s ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10))  : 0U; }
+// ── Proto → internal Tick mapping ────────────────────────────────────────────
 
-// ── Tick deserialisation ──────────────────────────────────────────────────────
-
-static Tick parse_tick(redisReply* fields) {
+static Tick proto_to_tick(const alpha::feed::Tick& p) {
     Tick t{};
-    t.timestamp_ns     = r_u64(fields, "ts_ns");
-    t.instrument_token = r_u32(fields, "token");
-    t.last_price       = r_dbl(fields, "price");
-    t.total_volume     = r_u64(fields, "volume");
-    t.open_interest    = r_dbl(fields, "oi");
-    t.bid_price        = r_dbl(fields, "bid_price");
-    t.bid_size         = r_u32(fields, "bid_size");
-    t.ask_price        = r_dbl(fields, "ask_price");
-    t.ask_size         = r_u32(fields, "ask_size");
+    t.timestamp_ns     = p.timestamp_ns();
+    t.instrument_token = p.token();
+    t.last_price       = p.last_price();
+    t.total_volume     = p.volume();
+    t.open_interest    = p.open_interest();
+    t.bid_price        = p.bid_price();
+    t.bid_size         = p.bid_size();
+    t.ask_price        = p.ask_price();
+    t.ask_size         = p.ask_size();
 
-    // 5-level market depth
-    for (int i = 0; i < 5; ++i) {
-        std::string bp = "bid_p" + std::to_string(i);
-        std::string bq = "bid_q" + std::to_string(i);
-        std::string ap = "ask_p" + std::to_string(i);
-        std::string aq = "ask_q" + std::to_string(i);
-        t.bids[i].price    = r_dbl(fields, bp.c_str());
-        t.bids[i].quantity = r_u32(fields, bq.c_str());
-        t.asks[i].price    = r_dbl(fields, ap.c_str());
-        t.asks[i].quantity = r_u32(fields, aq.c_str());
+    const int bid_depth = std::min(5, p.bids_size());
+    for (int i = 0; i < bid_depth; ++i) {
+        t.bids[i].price    = p.bids(i).price();
+        t.bids[i].quantity = p.bids(i).quantity();
+        t.bids[i].orders   = p.bids(i).orders();
+    }
+    const int ask_depth = std::min(5, p.asks_size());
+    for (int i = 0; i < ask_depth; ++i) {
+        t.asks[i].price    = p.asks(i).price();
+        t.asks[i].quantity = p.asks(i).quantity();
+        t.asks[i].orders   = p.asks(i).orders();
     }
 
-    // Option greeks (0.0 for non-options)
-    t.greeks.delta = r_dbl(fields, "delta");
-    t.greeks.gamma = r_dbl(fields, "gamma");
-    t.greeks.theta = r_dbl(fields, "theta");
-    t.greeks.vega  = r_dbl(fields, "vega");
-    t.greeks.rho   = r_dbl(fields, "rho");
-    t.greeks.iv    = r_dbl(fields, "iv");
+    // greeks() always returns a valid (possibly zero-filled) OptionGreeks message
+    t.greeks.delta = p.greeks().delta();
+    t.greeks.gamma = p.greeks().gamma();
+    t.greeks.theta = p.greeks().theta();
+    t.greeks.vega  = p.greeks().vega();
+    t.greeks.rho   = p.greeks().rho();
+    t.greeks.iv    = p.greeks().iv();
 
     return t;
 }
@@ -118,7 +127,7 @@ int main() {
     // Force line-buffered stdout so docker logs sees output immediately
     std::cout << std::unitbuf;
 
-    std::cout << "=== Alpha Ingester v2.0 (Redis→SHM Bridge) ===" << std::endl;
+    std::cout << "=== Alpha Ingester (Redis → SHM, proto transport) ===\n";
 
     // ── SHM ring buffer (producer side) ──────────────────────────────────────
     auto shm_manager = std::make_unique<ShmManager>(
@@ -156,8 +165,9 @@ int main() {
     const std::string stream  = "alpha:ticks";
     std::string       last_id = "$";   // start from new messages only
     uint64_t          total   = 0;
+    uint64_t          parse_errors = 0;
 
-    std::cout << "[Ingester] Reading from Redis stream " << stream << " …\n";
+    std::cout << "[Ingester] Reading proto ticks from Redis stream " << stream << " …\n";
 
     while (g_running.load(std::memory_order_relaxed)) {
         auto* reply = static_cast<redisReply*>(
@@ -198,9 +208,25 @@ int main() {
 
                     last_id = msg->element[0]->str;   // advance cursor
 
-                    Tick tick = parse_tick(msg->element[1]);
-                    if (tick.instrument_token == 0) continue;  // malformed
+                    // ── Deserialise proto payload ─────────────────────────────
+                    const char* pb_data = nullptr;
+                    size_t      pb_len  = 0;
+                    if (!field_bin(msg->element[1], "data", pb_data, pb_len)) {
+                        std::cerr << "[Ingester] Stream entry missing 'data' field\n";
+                        ++parse_errors;
+                        continue;
+                    }
 
+                    alpha::feed::Tick proto_tick;
+                    if (!proto_tick.ParseFromArray(pb_data, static_cast<int>(pb_len))) {
+                        std::cerr << "[Ingester] Proto parse failed (" << pb_len << " bytes)\n";
+                        ++parse_errors;
+                        continue;
+                    }
+
+                    if (proto_tick.token() == 0) continue;  // skip unresolved instruments
+
+                    Tick tick = proto_to_tick(proto_tick);
                     ring_buffer->push(tick);
                     ++total;
 
@@ -209,6 +235,7 @@ int main() {
                                   << " token=" << tick.instrument_token
                                   << " price=" << tick.last_price
                                   << " vol=" << tick.total_volume
+                                  << (parse_errors ? " errs=" + std::to_string(parse_errors) : "")
                                   << std::endl;
                     }
                 }
@@ -217,7 +244,8 @@ int main() {
         freeReplyObject(reply);
     }
 
-    std::cout << "[Ingester] Shutdown — " << total << " total ticks\n";
+    std::cout << "[Ingester] Shutdown — " << total << " ticks, "
+              << parse_errors << " parse errors\n";
     heartbeat.join();
     if (ctx) redisFree(ctx);
     return 0;

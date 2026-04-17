@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y \
     libboost-dev \
     libgtest-dev \
     libhiredis-dev \
+    libprotobuf-dev \
+    protobuf-compiler \
     nlohmann-json3-dev \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
@@ -35,6 +37,7 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y \
     libboost-system1.81.0 \
     libhiredis0.14 \
+    libprotobuf32 \
     ca-certificates \
     tzdata \
     && rm -rf /var/lib/apt/lists/*

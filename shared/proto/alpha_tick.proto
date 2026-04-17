@@ -1,0 +1,69 @@
+syntax = "proto3";
+package alpha.feed;
+
+// ── Alpha Internal Tick Schema ────────────────────────────────────────────────
+// Transport: Redis Stream "alpha:ticks" — single binary field "data"
+// Producer:  services/data_feed  (Python, live_feed.py)
+// Consumer:  services/ingester   (C++, main.cpp → SHM ring buffer)
+//            services/signal_engine (future direct consumer)
+//
+// Field number policy:
+//   1–15  : hot fields (1-byte tag encoding, put highest-frequency fields here)
+//   16–31 : warm fields (2-byte tag encoding)
+//   ≥32   : extension space, reserved
+//
+// Breaking change policy:
+//   NEVER reuse a field number.
+//   Adding new optional fields is always backwards-compatible.
+//   Renaming fields does not break the wire format (numbers are what matter).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// One bid or ask level in the order book.
+message DepthLevel {
+  double price    = 1;
+  uint32 quantity = 2;
+  uint32 orders   = 3;   // number of orders at this level (0 if unavailable)
+}
+
+// Option greeks + implied volatility for derivatives.
+// All fields default to 0.0 for non-option instruments.
+message OptionGreeks {
+  double delta = 1;
+  double gamma = 2;
+  double theta = 3;
+  double vega  = 4;
+  double rho   = 5;
+  double iv    = 6;   // implied volatility (also available for equity via mf.iv)
+}
+
+// Normalised tick carrying L1 + L2 data for one instrument.
+message Tick {
+  // ── Identity (hot fields) ─────────────────────────────────────────────────
+  uint32 token          = 1;   // DB instrument ID — used as O(1) routing key in C++
+  string instrument_key = 2;   // e.g. "NSE_EQ|INE002A01018"
+  uint64 timestamp_ns   = 3;   // Alpha ingestion time, nanoseconds since Unix epoch (UTC)
+
+  // ── Price / volume (hot fields) ───────────────────────────────────────────
+  double last_price     = 4;
+  uint64 volume         = 5;   // cumulative day volume
+  double open_interest  = 6;
+
+  // ── L1 best bid/ask (hot fields) ──────────────────────────────────────────
+  double bid_price      = 7;
+  uint32 bid_size       = 8;
+  double ask_price      = 9;
+  uint32 ask_size       = 10;
+
+  // ── L2 market depth — up to 5 levels each side ───────────────────────────
+  repeated DepthLevel bids = 11;
+  repeated DepthLevel asks = 12;
+
+  // ── Derivatives ───────────────────────────────────────────────────────────
+  OptionGreeks greeks   = 13;
+
+  // ── Additional market data ────────────────────────────────────────────────
+  double atp            = 14;   // average trade price
+  double prev_close     = 15;
+  double tbq            = 16;   // total buy quantity
+  double tsq            = 17;   // total sell quantity
+}

@@ -20,8 +20,9 @@ import aiohttp
 import redis.asyncio as aioredis
 import websockets
 
-# Generated from shared/proto/market_data_v3.proto at image build time
-import market_data_v3_pb2 as pb  # noqa: E402  (lives in the image root)
+# Generated from shared/proto/ at image build time (see services/data_feed/Dockerfile)
+import market_data_v3_pb2 as pb    # noqa: E402  Upstox wire format
+import alpha_tick_pb2 as atpb      # noqa: E402  Alpha internal tick schema
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,8 @@ class UpstoxLiveFeed:
     async def _connect_redis(self) -> None:
         host = os.getenv("REDIS_HOST", "redis")
         port = int(os.getenv("REDIS_PORT", "6379"))
-        self._redis = aioredis.from_url(f"redis://{host}:{port}", decode_responses=True)
+        # decode_responses=False: stream values are binary (serialized proto)
+        self._redis = aioredis.from_url(f"redis://{host}:{port}", decode_responses=False)
         await self._redis.ping()
         logger.info("[LiveFeed] Redis connected at %s:%d", host, port)
 
@@ -83,7 +85,7 @@ class UpstoxLiveFeed:
             "method": "sub",
             "data": {
                 "instrumentKeys": self.instrument_keys,
-                "mode":           "full",
+                "mode":           "full_d30",
             },
         })
         await ws.send(msg)
@@ -92,8 +94,8 @@ class UpstoxLiveFeed:
 
     # ── protobuf decode ───────────────────────────────────────────────────────
 
-    def _decode(self, raw: bytes) -> list[dict]:
-        """Decode a FeedResponse and return a list of tick dicts."""
+    def _decode(self, raw: bytes) -> list[atpb.Tick]:
+        """Decode an Upstox FeedResponse and return a list of alpha_tick Tick protos."""
         resp = pb.FeedResponse()
         resp.ParseFromString(raw)
 
@@ -111,61 +113,61 @@ class UpstoxLiveFeed:
                 logger.warning("[LiveFeed] Unknown instrument key (not in token_map): %s", key)
                 continue
 
-            tick: dict = {
-                "symbol": key,
-                "token":  token,
-                "ts_ns":  _now_ns(),
-            }
+            tick = atpb.Tick(
+                token=token,
+                instrument_key=key,
+                timestamp_ns=_now_ns(),
+            )
 
             if feed.HasField("fullFeed"):
                 ff = feed.fullFeed
                 if ff.HasField("marketFF"):
                     mf = ff.marketFF
-                    tick.update({
-                        "price":     mf.ltpc.ltp,
-                        "prev_close": mf.ltpc.cp,
-                        "volume":    mf.vtt,
-                        "oi":        mf.oi,
-                        "atp":       mf.atp,
-                        "tbq":       mf.tbq,
-                        "tsq":       mf.tsq,
-                        "iv":        mf.iv,
-                    })
-                    if mf.marketLevel.bidAskQuote:
-                        q0 = mf.marketLevel.bidAskQuote[0]
-                        tick.update({
-                            "bid_price": q0.bidP,
-                            "bid_size":  q0.bidQ,
-                            "ask_price": q0.askP,
-                            "ask_size":  q0.askQ,
-                        })
-                    # Depth levels 1-4
-                    for lvl, q in enumerate(mf.marketLevel.bidAskQuote[:5], start=0):
-                        tick[f"bid_p{lvl}"] = q.bidP
-                        tick[f"bid_q{lvl}"] = q.bidQ
-                        tick[f"ask_p{lvl}"] = q.askP
-                        tick[f"ask_q{lvl}"] = q.askQ
+                    tick.last_price    = mf.ltpc.ltp
+                    tick.prev_close    = mf.ltpc.cp
+                    tick.volume        = int(mf.vtt)
+                    tick.open_interest = mf.oi
+                    tick.atp           = mf.atp
+                    tick.tbq           = mf.tbq
+                    tick.tsq           = mf.tsq
+
+                    for q in mf.marketLevel.bidAskQuote[:5]:
+                        tick.bids.add(price=q.bidP, quantity=int(q.bidQ))
+                        tick.asks.add(price=q.askP, quantity=int(q.askQ))
+
+                    if tick.bids:
+                        tick.bid_price = tick.bids[0].price
+                        tick.bid_size  = tick.bids[0].quantity
+                        tick.ask_price = tick.asks[0].price
+                        tick.ask_size  = tick.asks[0].quantity
+
                     if mf.HasField("optionGreeks"):
                         g = mf.optionGreeks
-                        tick.update({"delta": g.delta, "gamma": g.gamma,
-                                     "theta": g.theta, "vega":  g.vega, "rho": g.rho})
+                        tick.greeks.delta = g.delta
+                        tick.greeks.gamma = g.gamma
+                        tick.greeks.theta = g.theta
+                        tick.greeks.vega  = g.vega
+                        tick.greeks.rho   = g.rho
+                    tick.greeks.iv = mf.iv   # always set; 0.0 for non-options
+
                 elif ff.HasField("indexFF"):
                     idx = ff.indexFF
-                    tick.update({
-                        "price":      idx.ltpc.ltp,
-                        "prev_close": idx.ltpc.cp,
-                        "volume":     0,
-                        "oi":         0.0,
-                    })
+                    tick.last_price = idx.ltpc.ltp
+                    tick.prev_close = idx.ltpc.cp
 
             ticks.append(tick)
         return ticks
 
     # ── redis publish ─────────────────────────────────────────────────────────
 
-    async def _publish(self, tick: dict) -> None:
-        fields = {k: str(v) for k, v in tick.items()}
-        await self._redis.xadd(REDIS_STREAM, fields, maxlen=REDIS_MAXLEN, approximate=True)
+    async def _publish(self, tick: atpb.Tick) -> None:
+        """Serialize tick as protobuf binary and publish to the Redis stream."""
+        await self._redis.xadd(
+            REDIS_STREAM,
+            {b"data": tick.SerializeToString()},
+            maxlen=REDIS_MAXLEN,
+            approximate=True,
+        )
 
     # ── main loop ─────────────────────────────────────────────────────────────
 
@@ -184,18 +186,22 @@ class UpstoxLiveFeed:
                                               ping_interval=20,
                                               ping_timeout=20) as ws:
                     backoff = 1
-                    await self._subscribe(ws)
+                    subscribed = False
                     logger.info("[LiveFeed] Streaming…")
 
                     async for raw in ws:
                         msgs_received += 1
-                        if msgs_received <= 5 or msgs_received % 100 == 0:
+                        if msgs_received <= 20 or msgs_received % 100 == 0:
                             logger.info("[LiveFeed] msg#%d type=%s size=%d bytes",
                                         msgs_received,
                                         "bytes" if isinstance(raw, bytes) else "text",
                                         len(raw))
                         if isinstance(raw, bytes):
                             ticks = self._decode(raw)
+                            # Subscribe after receiving the initial market_info handshake
+                            if not subscribed:
+                                await self._subscribe(ws)
+                                subscribed = True
                             for tick in ticks:
                                 await self._publish(tick)
                                 ticks_published += 1
@@ -204,6 +210,10 @@ class UpstoxLiveFeed:
                                                 ticks_published)
                         else:
                             logger.info("[LiveFeed] Text msg#%d: %s", msgs_received, raw[:120])
+                            # Subscribe after text handshake if not yet subscribed
+                            if not subscribed:
+                                await self._subscribe(ws)
+                                subscribed = True
 
             except (websockets.ConnectionClosed,
                     aiohttp.ClientError,
