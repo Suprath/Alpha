@@ -20,11 +20,20 @@ static std::string get_env(const char* key, const char* def = "") {
     return v ? v : def;
 }
 
-// ── Example signal-aware strategy ────────────────────────────────────────────
+// ── Mean-reversion + momentum strategy targeting 10-20% annual returns ──────
 //
-// Uses pre-computed BacktestSignal (RSI + MACD) when available.
-// Falls back to VWAP deviation when signals are not yet warmed up.
-// In production, swap this lambda for a call into strategy_engine batch mode.
+// Design principles:
+//   • Long-only: NSE equity CNC segment — no overnight short selling.
+//   • Capital-proportional sizing: allocate ₹1L (~10% of ₹10L capital) per
+//     trade so each position is meaningful relative to total equity.
+//   • Multi-signal confirmation: require RSI oversold + MACD momentum shift
+//     (histogram turning positive) to reduce false entries.
+//   • BB refinement: lower-band touch adds conviction for mean-reversion;
+//     upper-band touch or RSI overbought triggers clean exit.
+//   • Exit discipline: sell on RSI > 65 OR BB %B > 0.88 — lock in gains
+//     before momentum reverses, keep avg winner larger than avg loser.
+//   • Warmup fallback: VWAP mean-reversion with half-sized allocation until
+//     35-bar signal warmup completes (MACD is the slowest indicator).
 static alpha::models::OrderIntent signal_strategy(
     const alpha::models::BacktestTick&    tick,
     const alpha::backtest::BacktestClock& /*clock*/,
@@ -36,50 +45,75 @@ static alpha::models::OrderIntent signal_strategy(
     intent.price            = static_cast<double>(tick.last_price);
     intent.strategy_id      = 1;
 
-    // ── Signal-based logic (preferred when warmed up) ─────────────────────────
+    const double price = static_cast<double>(tick.last_price);
+    if (price <= 0.0) return intent;
+
+    // Allocate ₹1,00,000 per entry (10% of ₹10L starting capital).
+    // Ensures meaningful P&L per trade even for high-priced stocks.
+    const int qty = std::max(1, static_cast<int>(100000.0 / price));
+
+    // ── Signal-based logic (active after 35-bar MACD warmup) ──────────────────
     if (sig && sig->valid_rsi && sig->valid_macd) {
-        // RSI oversold + MACD bullish crossover → long entry
-        if (sig->rsi_14 < 35.0 && sig->macd_histogram > 0.0 && sig->macd_line < 0.0) {
+        const double rsi  = sig->rsi_14;
+        const double hist = sig->macd_histogram;
+
+        // ── LONG ENTRY ─────────────────────────────────────────────────────────
+        // Condition: RSI recovering from oversold (<40) AND MACD histogram has
+        // turned positive (momentum shifting bullish). Optional BB confirmation:
+        // price in lower half of band signals we are still close to value.
+        if (rsi < 40.0 && hist > 0.0) {
+            const bool bb_ok = !sig->valid_bb || sig->bb_pct_b < 0.5;
+            if (bb_ok) {
+                intent.side       = 1;
+                intent.qty        = qty;
+                intent.reason     = 1;   // ENTRY
+                intent.confidence = std::min(1.0, 0.40 + (40.0 - rsi) / 40.0 * 0.50);
+                return intent;
+            }
+        }
+
+        // BB lower-band touch (strong mean-reversion setup):
+        // price near/below lower band AND not already overbought on RSI.
+        if (sig->valid_bb && sig->bb_pct_b < 0.08 && rsi < 55.0) {
             intent.side       = 1;
-            intent.qty        = 1;
-            intent.reason     = 1;   // ENTRY
-            intent.confidence = std::min(1.0, (35.0 - sig->rsi_14) / 35.0 + 0.3);
+            intent.qty        = qty;
+            intent.reason     = 1;
+            intent.confidence = 0.60;
             return intent;
         }
-        // RSI overbought + MACD bearish crossover → short/exit
-        if (sig->rsi_14 > 65.0 && sig->macd_histogram < 0.0 && sig->macd_line > 0.0) {
+
+        // ── LONG EXIT ──────────────────────────────────────────────────────────
+        // Exit when either RSI signals overbought or price tags the upper BB.
+        // Both indicate the mean-reversion move has largely played out.
+        const bool rsi_exit = (rsi > 65.0);
+        const bool bb_exit  = (sig->valid_bb && sig->bb_pct_b > 0.88);
+        if (rsi_exit || bb_exit) {
             intent.side       = -1;
-            intent.qty        = 1;
+            intent.qty        = qty;
             intent.reason     = 2;   // EXIT
-            intent.confidence = std::min(1.0, (sig->rsi_14 - 65.0) / 35.0 + 0.3);
+            intent.confidence = rsi_exit
+                ? std::min(1.0, 0.40 + (rsi - 65.0) / 35.0 * 0.50)
+                : 0.55;
             return intent;
         }
-        // Bollinger band mean-reversion (when BB valid too)
-        if (sig->valid_bb) {
-            if (sig->bb_pct_b < 0.05) {          // Touching lower band
-                intent.side = 1; intent.qty = 1; intent.reason = 1;
-                intent.confidence = 0.5;
-                return intent;
-            }
-            if (sig->bb_pct_b > 0.95) {          // Touching upper band
-                intent.side = -1; intent.qty = 1; intent.reason = 2;
-                intent.confidence = 0.5;
-                return intent;
-            }
-        }
-        return intent;  // Signals valid but no actionable setup — no trade
+
+        return intent;  // Signals valid but no actionable setup — hold or flat
     }
 
-    // ── Fallback: VWAP deviation (warmup period or no signals loaded) ─────────
+    // ── Fallback: VWAP mean-reversion (warmup / no signals loaded) ───────────
+    // During warmup use half-sized allocation to limit early-bar exposure.
     const float spread = tick.ask_price - tick.bid_price;
     const bool  liquid = (tick.ask_price > 0.0f && tick.last_price > 0.0f &&
                           spread / tick.last_price < 0.005f);
     if (!liquid) return intent;
 
-    if (tick.last_price > tick.vwap * 1.0005f) {
-        intent.side = 1; intent.qty = 1; intent.reason = 1; intent.confidence = 0.4;
-    } else if (tick.last_price < tick.vwap * 0.9995f) {
-        intent.side = -1; intent.qty = 1; intent.reason = 2; intent.confidence = 0.4;
+    const int fqty = std::max(1, static_cast<int>(50000.0 / price));
+
+    // Buy below VWAP (undervalued intraday), sell above VWAP (take profit)
+    if (tick.last_price < tick.vwap * 0.9990f) {
+        intent.side = 1;  intent.qty = fqty; intent.reason = 1; intent.confidence = 0.35;
+    } else if (tick.last_price > tick.vwap * 1.0010f) {
+        intent.side = -1; intent.qty = fqty; intent.reason = 2; intent.confidence = 0.35;
     }
     return intent;
 }

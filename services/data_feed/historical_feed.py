@@ -33,7 +33,7 @@ QUESTDB_HOST     = os.getenv("QUESTDB_HOST",       "questdb")
 QUESTDB_ILP_PORT = int(os.getenv("QUESTDB_ILP_PORT", "9009"))
 QUESTDB_PG_PORT  = 8812   # PostgreSQL wire — used for existence / holiday queries
 
-MAX_REQUESTS_PER_MIN = 66
+MAX_REQUESTS_PER_MIN = 55    # Upstox ~66/min hard cap; 55 gives 17% safety margin
 MAX_RETRIES          = 3
 RETRY_BASE_DELAY     = 2.0   # seconds; doubles each attempt
 EXISTENCE_TOLERANCE  = 0.90  # accept chunk if ≥90% of expected bars present
@@ -125,27 +125,65 @@ def _load_known_holidays() -> set:
 # ── Rate limiter ───────────────────────────────────────────────────────────────
 
 class SlidingWindowThrottler:
-    """Never allows more than max_per_minute calls in any rolling 60-second window."""
+    """
+    Two-layer throttle that prevents burst-then-stall cycles:
+
+    Layer 1 — Uniform pacing: enforces a minimum gap of 60/max_per_minute
+              seconds between every request (~1.09 s at 55 req/min). This
+              spreads requests evenly across the minute so the sliding window
+              never fills up in a burst.
+
+    Layer 2 — Sliding window: a while-loop that keeps sleeping until the
+              60-second window actually has capacity before appending. The
+              original single-if check could exit the sleep and append even
+              when still at the limit, silently growing the queue past max.
+
+    reset_window(): call after a server-side 429 to flush the timestamp
+              history so the next acquire() doesn't re-burst immediately
+              after the cooldown sleep.
+    """
 
     def __init__(self, max_per_minute: int = MAX_REQUESTS_PER_MIN) -> None:
-        self._max        = max_per_minute
+        self._max      = max_per_minute
+        self._min_gap  = 60.0 / max_per_minute   # ~1.09 s at 55 req/min
         self._timestamps: deque = deque()
+        self._last_req = 0.0                      # monotonic time of last request
 
     async def acquire(self) -> None:
-        now = time.monotonic()
-        while self._timestamps and now - self._timestamps[0] > 60.0:
-            self._timestamps.popleft()
+        # ── Layer 1: uniform pacing ───────────────────────────────────────────
+        now      = time.monotonic()
+        gap_wait = self._last_req + self._min_gap - now
+        if gap_wait > 0.001:
+            await asyncio.sleep(gap_wait)
 
-        if len(self._timestamps) >= self._max:
-            wait = 60.0 - (now - self._timestamps[0]) + 0.05
-            if wait > 0:
-                logger.info("[HistFeed] Rate limit hit — sleeping %.2fs", wait)
-                await asyncio.sleep(wait)
+        # ── Layer 2: sliding-window guard (while loop, not if) ────────────────
+        while True:
             now = time.monotonic()
             while self._timestamps and now - self._timestamps[0] > 60.0:
                 self._timestamps.popleft()
 
-        self._timestamps.append(time.monotonic())
+            if len(self._timestamps) < self._max:
+                break   # capacity available — proceed
+
+            # Window still full: wait until the oldest slot would expire,
+            # then loop back and re-check (don't just append blindly).
+            wait = 60.0 - (now - self._timestamps[0]) + 0.1
+            logger.info("[HistFeed] Rate throttle — waiting %.2fs for window capacity",
+                        wait)
+            await asyncio.sleep(max(0.05, wait))
+
+        now = time.monotonic()
+        self._last_req = now
+        self._timestamps.append(now)
+
+    def reset_window(self) -> None:
+        """
+        Flush timestamp history after a server-side 429.
+        Forces a full min_gap pause before the next request so we don't
+        immediately re-burst after a cooldown sleep.
+        """
+        self._timestamps.clear()
+        self._last_req = time.monotonic()   # next acquire() will still wait min_gap
 
 
 # ── Date-chunking helpers ──────────────────────────────────────────────────────
@@ -358,10 +396,14 @@ class UpstoxHistoricalFeed:
 
             except aiohttp.ClientResponseError as exc:
                 if exc.status == 429:
-                    cooldown = 62.0
+                    # Server rejected us despite our local throttle.
+                    # Reset the sliding window so the post-cooldown resume
+                    # doesn't immediately re-burst into another 429.
+                    self._throttler.reset_window()
+                    cooldown = 65.0
                     logger.warning(
-                        "[HistFeed] %s %s→%s — 429 rate limited. "
-                        "Cooling down %.0fs (attempt %d/%d).",
+                        "[HistFeed] %s %s→%s — 429 from server. "
+                        "Window reset + cooling down %.0fs (attempt %d/%d).",
                         symbol, chunk_from, chunk_to, cooldown, attempt, MAX_RETRIES,
                     )
                     await asyncio.sleep(cooldown)
@@ -506,18 +548,20 @@ class UpstoxHistoricalFeed:
                     )
 
                     # ── 5. Discover and record holidays ───────────────────────
-                    # Any weekday that the API returned no candles for is a holiday.
-                    covered_dates = _dates_from_candle_rows(rows)
-                    new_holidays  = [
-                        d for d in weekdays
-                        if d not in covered_dates
-                        and d not in self._known_holidays
-                    ]
-                    if new_holidays:
-                        self._record_new_holidays(new_holidays)
-
-                    if not rows:
-                        continue   # all days in chunk were holidays
+                    # Only learn holidays from chunks that returned some data —
+                    # if the whole chunk is empty it's likely a pre-listing period
+                    # (stock didn't exist yet) rather than a market holiday.
+                    if rows:
+                        covered_dates = _dates_from_candle_rows(rows)
+                        new_holidays  = [
+                            d for d in weekdays
+                            if d not in covered_dates
+                            and d not in self._known_holidays
+                        ]
+                        if new_holidays:
+                            self._record_new_holidays(new_holidays)
+                    else:
+                        continue   # pre-listing or all days in chunk were holidays
 
                     # ── 6. Write candles to QuestDB ───────────────────────────
                     for row in reversed(rows):   # Upstox returns newest-first

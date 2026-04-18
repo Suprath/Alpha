@@ -21,6 +21,7 @@ from commands import (
     SERVICES,
     ENGINE_CONTAINERS,
     TOKEN_SYMBOLS,
+    get_backtest_instruments,
     start_container,
     stop_container,
     restart_container,
@@ -35,6 +36,7 @@ from commands import (
     get_container_logs,
     get_container_info,
     run_populate_backtest_ticks,
+    run_signal_engine_batch,
 )
 
 B   = "#58a6ff"
@@ -320,18 +322,18 @@ class BacktestModal(ModalScreen):
     BINDINGS = [("escape", "dismiss", "Close")]
 
     def compose(self) -> ComposeResult:
-        from datetime import date as _date
-        today     = _date.today().strftime("%Y-%m-%d")
-        month_ago = (_date.today().replace(day=1)).strftime("%Y-%m-%d")
+        from datetime import date as _date, timedelta as _td
+        today          = _date.today().strftime("%Y-%m-%d")
+        three_years_ago = (_date.today() - _td(days=3 * 365)).strftime("%Y-%m-%d")
 
         with Vertical(id="bt-dialog"):
-            yield Label(f"[bold {B}]Run Backtest[/]", id="modal-title")
+            yield Label(f"[bold {B}]Run Backtest — Top 10 NSE (3Y)[/]", id="modal-title")
 
             # ── Scrollable form body ──────────────────────────────────────────
             with Vertical(id="bt-form"):
                 yield Label("From date (YYYY-MM-DD)", classes="modal-label")
-                yield Input(value=month_ago, id="inp-bt-from", classes="modal-input",
-                            placeholder="2024-01-01")
+                yield Input(value=three_years_ago, id="inp-bt-from", classes="modal-input",
+                            placeholder="2023-04-18")
 
                 yield Label("To date (YYYY-MM-DD)", classes="modal-label")
                 yield Input(value=today, id="inp-bt-to", classes="modal-input",
@@ -347,8 +349,8 @@ class BacktestModal(ModalScreen):
                 yield Input(value="2", id="inp-slippage", classes="modal-input")
 
                 yield Label(
-                    f"[{GR}]{', '.join(TOKEN_SYMBOLS.values())}\n"
-                    f"Missing data auto-backfilled before simulation.[/]",
+                    f"[{GR}]Pipeline: backfill → signals → ticks → export → simulate\n"
+                    f"Instruments resolved live from PostgreSQL at run time[/]",
                     classes="modal-label",
                 )
 
@@ -402,7 +404,9 @@ class BacktestModal(ModalScreen):
 
         start_ns = date_to_start_ns(from_date)
         end_ns   = date_to_end_ns(to_date)
-        tokens   = list(TOKEN_SYMBOLS.items())
+        # Dynamically resolve instrument IDs from PostgreSQL (falls back to TOKEN_SYMBOLS)
+        instruments = await loop.run_in_executor(None, get_backtest_instruments)
+        tokens   = list(instruments.items())
         lines: list[str] = []
 
         def abort(msg: str) -> None:
@@ -414,7 +418,7 @@ class BacktestModal(ModalScreen):
         # historical_feed.py already checks existing candles per chunk and skips
         # dates already present — so this is a no-op when data is up to date.
         lines += [
-            f"[{B}]Step 1/4 — Backfill (auto-skip if data present)[/]",
+            f"[{B}]Step 1/5 — Backfill (auto-skip if data present)[/]",
             f"[{GR}]{from_date} → {to_date}  starting container…[/]",
         ]
         self._update(lines)
@@ -455,8 +459,28 @@ class BacktestModal(ModalScreen):
             lines[-1] = f"[{GR}]Backfill {status}{'.' * dots}[/]"
             self._update(lines)
 
-        # ── Step 2: populate backtest_ticks ───────────────────────────────────
-        lines += ["", f"[{B}]Step 2/4 — Populating backtest_ticks[/]",
+        # ── Step 2: compute OHLCV signals (RSI, MACD, BB, VWAP dev) ─────────────
+        lines += ["", f"[{B}]Step 2/5 — Computing bar signals per instrument[/]"]
+        self._update(lines)
+
+        for i, (tok, sym) in enumerate(tokens, 1):
+            lines.append(f"[{GR}]  [{i}/{len(tokens)}] {sym:<12} computing signals…[/]")
+            self._update(lines)
+            result = await loop.run_in_executor(
+                None,
+                lambda t=tok, s=sym: run_signal_engine_batch(t, s, start_ns, end_ns),
+            )
+            if result.startswith("ERROR"):
+                lines[-1] = f"[{GR}]  [{i}/{len(tokens)}] {sym:<12} ⚠ no signals (VWAP fallback)[/]"
+            else:
+                lines[-1] = f"[{G}]  [{i}/{len(tokens)}] {sym:<12} ✓ signals ready[/]"
+            self._update(lines)
+
+        lines.append(f"[{G}]Signal computation done.[/]")
+        self._update(lines)
+
+        # ── Step 3: populate backtest_ticks ───────────────────────────────────
+        lines += ["", f"[{B}]Step 3/5 — Populating backtest_ticks[/]",
                   f"[{GR}]QuestDB candles → backtest_ticks…[/]"]
         self._update(lines)
 
@@ -467,8 +491,8 @@ class BacktestModal(ModalScreen):
         lines[-1] = f"[{G}]✓ backtest_ticks ready[/]"
         self._update(lines)
 
-        # ── Step 3: export .alpha files ───────────────────────────────────────
-        lines += ["", f"[{B}]Step 3/4 — Exporting .alpha files[/]"]
+        # ── Step 4: export .alpha files ───────────────────────────────────────
+        lines += ["", f"[{B}]Step 4/5 — Exporting .alpha files[/]"]
         self._update(lines)
 
         for i, (tok, sym) in enumerate(tokens, 1):
@@ -491,8 +515,8 @@ class BacktestModal(ModalScreen):
         lines.append(f"[{G}]All exports done.[/]")
         self._update(lines)
 
-        # ── Step 4: run simulation ────────────────────────────────────────────
-        lines += ["", f"[{B}]Step 4/4 — Launching simulation…[/]"]
+        # ── Step 5: run simulation ────────────────────────────────────────────
+        lines += ["", f"[{B}]Step 5/5 — Launching simulation…[/]"]
         self._update(lines)
 
         cid = await loop.run_in_executor(
@@ -507,20 +531,36 @@ class BacktestModal(ModalScreen):
         )
         self._update(lines)
 
-        # Poll until the backtest container exits (typically < 1 second)
+        # Poll until the backtest container exits (may take several minutes for 3Y data)
         dots = 0
+        sim_deadline = loop.time() + 600  # 10-minute hard timeout
         while True:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)
             info = await loop.run_in_executor(
                 None, lambda: get_container_info("alpha-backtest-tui")
             )
             status = info.get("status", "absent")
-            if status in ("exited", "dead", "absent"):
+            if status in ("exited", "dead"):
                 ec = info.get("exit_code", -1)
                 if ec == 0:
                     lines[-1] = f"[{G}]✓ Simulation complete[/]"
                 else:
                     lines[-1] = f"[{R}]✗ Simulation exit {ec}[/]"
+                self._update(lines)
+                break
+            if status == "absent":
+                # Container cleaned up before we polled — check logs to determine outcome
+                logs_quick = await loop.run_in_executor(
+                    None, lambda: get_container_logs("alpha-backtest-tui", tail=5)
+                )
+                if "total_net_pnl" in logs_quick or "Completed" in logs_quick:
+                    lines[-1] = f"[{G}]✓ Simulation complete[/]"
+                else:
+                    lines[-1] = f"[{R}]✗ Container absent — may have been removed[/]"
+                self._update(lines)
+                break
+            if loop.time() > sim_deadline:
+                lines[-1] = f"[{R}]✗ Simulation timed out (>10 min)[/]"
                 self._update(lines)
                 break
             dots = (dots % 3) + 1

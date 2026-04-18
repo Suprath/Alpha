@@ -56,15 +56,61 @@ ENGINE_CONTAINERS = [
     "alpha-market-engine",
 ]
 
-# Token → Symbol (fallback when Postgres is unreachable)
+# Token → Symbol (fallback when Postgres is unreachable — live tick display)
 TOKEN_SYMBOLS: dict[str, str] = {
-    "105712": "INFY",
-    "105713": "NIFTY",
-    "105714": "RELIANCE",
-    "105715": "TCS",
-    "105716": "HDFCBANK",
-    "105717": "ICICIBANK",
+    "105718": "INFY",
+    "105719": "SBIN",
+    "105720": "RELIANCE",
+    "105721": "TCS",
+    "105722": "HDFCBANK",
+    "105724": "SUNPHARMA",
+    "105725": "ICICIBANK",
+    "105726": "ADANIENT",
+    "105727": "TMCV",
+    "105730": "BAJFINANCE",
 }
+
+# Backtest-specific target instruments (ISINs used by instrument_loader)
+_BACKTEST_ISINS = [
+    "NSE_EQ|INE002A01018",   # RELIANCE
+    "NSE_EQ|INE467B01029",   # TCS
+    "NSE_EQ|INE040A01034",   # HDFCBANK
+    "NSE_EQ|INE009A01021",   # INFY
+    "NSE_EQ|INE090A01021",   # ICICIBANK
+    "NSE_EQ|INE1TAE01010",   # TMCV (Tata Motors CV)
+    "NSE_EQ|INE423A01024",   # ADANIENT
+    "NSE_EQ|INE044A01036",   # SUNPHARMA
+    "NSE_EQ|INE062A01020",   # SBIN
+    "NSE_EQ|INE296A01032",   # BAJFINANCE
+]
+
+def get_backtest_instruments() -> dict[str, str]:
+    """
+    Query PostgreSQL for the current backtest instrument list.
+    Returns {str(serial_id): trading_symbol} using the most-recent date's records,
+    filtered to the 10 target ISINs so stale or unrelated entries are excluded.
+    Falls back to TOKEN_SYMBOLS when PostgreSQL is unreachable.
+    """
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            host=POSTGRES_HOST, port=5432,
+            dbname="alpha_db", user="alpha_user", password="alpha_password",
+        )
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, trading_symbol FROM instrument_universe "
+            "WHERE date = (SELECT MAX(date) FROM instrument_universe) "
+            "  AND instrument_key = ANY(%s) "
+            "ORDER BY id",
+            (_BACKTEST_ISINS,),
+        )
+        result = {str(row[0]): row[1] for row in cur.fetchall()}
+        conn.close()
+        return result if result else TOKEN_SYMBOLS
+    except Exception:
+        return TOKEN_SYMBOLS
+
 
 # ── Docker helpers ────────────────────────────────────────────────────────────
 

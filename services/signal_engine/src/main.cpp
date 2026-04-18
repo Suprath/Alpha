@@ -61,8 +61,12 @@ static int run_backtest_batch() {
     const uint64_t start_us = start_ns / 1000ULL;
     const uint64_t end_us   = end_ns   / 1000ULL;
 
+    // Use typical price (H+L+C)/3 as vwap proxy — historical candles from
+    // historical_feed.py do not include a vwap column (only live signal-engine
+    // bars do).  This avoids a NULL/column-missing crash on backtest-only setups.
     const std::string sql =
-        "SELECT cast(timestamp as long) as ts_us, open, high, low, close, volume, vwap "
+        "SELECT cast(timestamp as long) as ts_us, open, high, low, close, volume,"
+        " (high+low+close)/3.0 as vwap "
         "FROM candles "
         "WHERE symbol = " + txn.quote(symbol) +
         "  AND timestamp >= cast(" + std::to_string(start_us) + " as timestamp)"

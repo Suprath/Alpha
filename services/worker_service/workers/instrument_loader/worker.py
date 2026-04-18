@@ -86,14 +86,18 @@ class InstrumentLoaderWorker(BaseWorker):
         print(f"[instrument_loader] Parsed {len(json_data)} instruments.")
 
         today = datetime.now().date()
-        # Top 5 NSE large-cap liquid stocks + Nifty 50 index reference
+        # Top 10 NSE large-cap performers (3Y backtest universe)
         target_keys = [
             "NSE_EQ|INE002A01018",   # RELIANCE
             "NSE_EQ|INE467B01029",   # TCS
             "NSE_EQ|INE040A01034",   # HDFCBANK
             "NSE_EQ|INE009A01021",   # INFY
             "NSE_EQ|INE090A01021",   # ICICIBANK
-            "NSE_INDEX|Nifty 50",    # Market reference index
+            "NSE_EQ|INE1TAE01010",   # TMCV (Tata Motors CV — continuing entity post-demerger)
+            "NSE_EQ|INE423A01024",   # ADANIENT
+            "NSE_EQ|INE044A01036",   # SUNPHARMA
+            "NSE_EQ|INE062A01020",   # SBIN
+            "NSE_EQ|INE296A01032",   # BAJFINANCE
         ]
         records = []
 
