@@ -9,6 +9,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <memory>
 #include <cstdlib>
 #include <filesystem>
 #include <chrono>
@@ -20,102 +21,140 @@ static std::string get_env(const char* key, const char* def = "") {
     return v ? v : def;
 }
 
-// ── Mean-reversion + momentum strategy targeting 10-20% annual returns ──────
+// ── Strategy factory — stateful mean-reversion + momentum ───────────────────
 //
-// Design principles:
-//   • Long-only: NSE equity CNC segment — no overnight short selling.
-//   • Capital-proportional sizing: allocate ₹1L (~10% of ₹10L capital) per
-//     trade so each position is meaningful relative to total equity.
-//   • Multi-signal confirmation: require RSI oversold + MACD momentum shift
-//     (histogram turning positive) to reduce false entries.
-//   • BB refinement: lower-band touch adds conviction for mean-reversion;
-//     upper-band touch or RSI overbought triggers clean exit.
-//   • Exit discipline: sell on RSI > 65 OR BB %B > 0.88 — lock in gains
-//     before momentum reverses, keep avg winner larger than avg loser.
-//   • Warmup fallback: VWAP mean-reversion with half-sized allocation until
-//     35-bar signal warmup completes (MACD is the slowest indicator).
-static alpha::models::OrderIntent signal_strategy(
-    const alpha::models::BacktestTick&    tick,
-    const alpha::backtest::BacktestClock& /*clock*/,
-    const alpha::models::BacktestSignal*  sig)
-{
-    alpha::models::OrderIntent intent{};
-    intent.timestamp_ns     = tick.timestamp_ns;
-    intent.instrument_token = tick.instrument_token;
-    intent.price            = static_cast<double>(tick.last_price);
-    intent.strategy_id      = 1;
+// Returns a lambda that captures per-instrument position state.  Must be
+// called once per instrument (inside the file loop) so state resets cleanly.
+//
+// Design:
+//   • Long-only, single position at a time.
+//   • Entry: RSI(14) < 30 (deep oversold) AND MACD histogram just turned
+//     positive (momentum inflecting bullish) AND BB %B < 0.25 (near lower
+//     band).  Three-way confirmation keeps false-entry rate low.
+//   • Exit: RSI > 70 OR BB %B > 0.92 OR hard stop-loss -1.5%.
+//   • Min hold: 15 bars (~15 min) — prevents exit on first noise spike.
+//   • Max hold: 120 bars (~2 h) — forces close if trade doesn't play out.
+//   • Cooldown: 20 bars after any exit before next entry — avoids whipsaws.
+//   • No warmup fallback: VWAP ±0.1% triggered on every bar.  Silence the
+//     strategy during the 35-bar MACD warmup; better than thrashing.
+//   • Sizing: ₹1L per trade (~10% of ₹10L capital) for meaningful P&L.
+static auto make_strategy() {
+    // Per-instrument mutable state (reset each time make_strategy() is called)
+    struct State {
+        bool    in_position   = false;
+        double  entry_px      = 0.0;
+        int32_t position_bars = 0;   // bars held so far
+        int32_t cooldown_bars = 0;   // bars until next entry allowed
+    };
 
-    const double price = static_cast<double>(tick.last_price);
-    if (price <= 0.0) return intent;
+    auto state = std::make_shared<State>();
 
-    // Allocate ₹1,00,000 per entry (10% of ₹10L starting capital).
-    // Ensures meaningful P&L per trade even for high-priced stocks.
-    const int qty = std::max(1, static_cast<int>(100000.0 / price));
+    return [state](
+        const alpha::models::BacktestTick&    tick,
+        const alpha::backtest::BacktestClock& /*clock*/,
+        const alpha::models::BacktestSignal*  sig
+    ) -> alpha::models::OrderIntent {
 
-    // ── Signal-based logic (active after 35-bar MACD warmup) ──────────────────
-    if (sig && sig->valid_rsi && sig->valid_macd) {
+        alpha::models::OrderIntent intent{};
+        intent.timestamp_ns     = tick.timestamp_ns;
+        intent.instrument_token = tick.instrument_token;
+        intent.price            = static_cast<double>(tick.last_price);
+        intent.strategy_id      = 1;
+
+        const double price = static_cast<double>(tick.last_price);
+        if (price <= 0.0) return intent;
+
+        // ₹1L per entry — 10% of ₹10L capital, meaningful per-trade P&L
+        const int qty = std::max(1, static_cast<int>(100000.0 / price));
+
+        auto emit_exit = [&](int32_t cooldown) -> alpha::models::OrderIntent {
+            intent.side           = -1;
+            intent.qty            = qty;
+            intent.reason         = 2;   // EXIT
+            intent.confidence     = 0.80;
+            state->in_position    = false;
+            state->entry_px       = 0.0;
+            state->position_bars  = 0;
+            state->cooldown_bars  = cooldown;
+            return intent;
+        };
+
+        // ── In-position management ─────────────────────────────────────────────
+        if (state->in_position) {
+            ++state->position_bars;
+
+            // Hard stop-loss: -1.5% from entry
+            if (price < state->entry_px * 0.985) {
+                return emit_exit(30);   // 30-bar cooldown after a stop
+            }
+
+            // Signal-based exit — only after min-hold (15 bars) to avoid noise
+            if (state->position_bars >= 15 && sig && sig->valid_rsi) {
+                const bool rsi_exit = (sig->rsi_14 > 70.0);
+                const bool bb_exit  = (sig->valid_bb && sig->bb_pct_b > 0.92);
+                if (rsi_exit || bb_exit) {
+                    return emit_exit(20);
+                }
+            }
+
+            // Time-based exit: close after 2 h (120 bars) regardless
+            if (state->position_bars >= 120) {
+                return emit_exit(20);
+            }
+
+            return intent;  // hold
+        }
+
+        // ── Cooldown between trades ────────────────────────────────────────────
+        if (state->cooldown_bars > 0) {
+            --state->cooldown_bars;
+            return intent;
+        }
+
+        // ── Entry — requires full signal set (past MACD warmup) ───────────────
+        // Silence strategy during the first 35-bar warmup rather than falling
+        // back to the noisy VWAP ±0.1% threshold.
+        if (!sig || !sig->valid_rsi || !sig->valid_macd) return intent;
+
         const double rsi  = sig->rsi_14;
         const double hist = sig->macd_histogram;
 
-        // ── LONG ENTRY ─────────────────────────────────────────────────────────
-        // Condition: RSI recovering from oversold (<40) AND MACD histogram has
-        // turned positive (momentum shifting bullish). Optional BB confirmation:
-        // price in lower half of band signals we are still close to value.
-        if (rsi < 40.0 && hist > 0.0) {
-            const bool bb_ok = !sig->valid_bb || sig->bb_pct_b < 0.5;
+        // Primary setup: deep oversold + momentum inflecting + near lower BB
+        // RSI < 30: stock is genuinely oversold (not just correcting)
+        // hist > 0: MACD histogram just turned positive — buying pressure growing
+        // bb_pct_b < 0.25: price still in the lower quarter of the band
+        if (rsi < 30.0 && hist > 0.0) {
+            const bool bb_ok = !sig->valid_bb || sig->bb_pct_b < 0.25;
             if (bb_ok) {
-                intent.side       = 1;
-                intent.qty        = qty;
-                intent.reason     = 1;   // ENTRY
-                intent.confidence = std::min(1.0, 0.40 + (40.0 - rsi) / 40.0 * 0.50);
+                intent.side          = 1;
+                intent.qty           = qty;
+                intent.reason        = 1;   // ENTRY
+                intent.confidence    = std::min(1.0, 0.50 + (30.0 - rsi) / 30.0 * 0.40);
+                state->in_position   = true;
+                state->entry_px      = price;
+                state->position_bars = 0;
+                state->cooldown_bars = 0;
                 return intent;
             }
         }
 
-        // BB lower-band touch (strong mean-reversion setup):
-        // price near/below lower band AND not already overbought on RSI.
-        if (sig->valid_bb && sig->bb_pct_b < 0.08 && rsi < 55.0) {
-            intent.side       = 1;
-            intent.qty        = qty;
-            intent.reason     = 1;
-            intent.confidence = 0.60;
+        // Secondary: BB lower-band pierce — strong mean-reversion signal
+        // bb_pct_b < 0.05: price at or below 2-sigma lower band
+        // rsi < 45: not overbought; hist > -0.5: MACD not in free-fall
+        if (sig->valid_bb && sig->bb_pct_b < 0.05 && rsi < 45.0 && hist > -0.5) {
+            intent.side          = 1;
+            intent.qty           = qty;
+            intent.reason        = 1;
+            intent.confidence    = 0.65;
+            state->in_position   = true;
+            state->entry_px      = price;
+            state->position_bars = 0;
+            state->cooldown_bars = 0;
             return intent;
         }
 
-        // ── LONG EXIT ──────────────────────────────────────────────────────────
-        // Exit when either RSI signals overbought or price tags the upper BB.
-        // Both indicate the mean-reversion move has largely played out.
-        const bool rsi_exit = (rsi > 65.0);
-        const bool bb_exit  = (sig->valid_bb && sig->bb_pct_b > 0.88);
-        if (rsi_exit || bb_exit) {
-            intent.side       = -1;
-            intent.qty        = qty;
-            intent.reason     = 2;   // EXIT
-            intent.confidence = rsi_exit
-                ? std::min(1.0, 0.40 + (rsi - 65.0) / 35.0 * 0.50)
-                : 0.55;
-            return intent;
-        }
-
-        return intent;  // Signals valid but no actionable setup — hold or flat
-    }
-
-    // ── Fallback: VWAP mean-reversion (warmup / no signals loaded) ───────────
-    // During warmup use half-sized allocation to limit early-bar exposure.
-    const float spread = tick.ask_price - tick.bid_price;
-    const bool  liquid = (tick.ask_price > 0.0f && tick.last_price > 0.0f &&
-                          spread / tick.last_price < 0.005f);
-    if (!liquid) return intent;
-
-    const int fqty = std::max(1, static_cast<int>(50000.0 / price));
-
-    // Buy below VWAP (undervalued intraday), sell above VWAP (take profit)
-    if (tick.last_price < tick.vwap * 0.9990f) {
-        intent.side = 1;  intent.qty = fqty; intent.reason = 1; intent.confidence = 0.35;
-    } else if (tick.last_price > tick.vwap * 1.0010f) {
-        intent.side = -1; intent.qty = fqty; intent.reason = 2; intent.confidence = 0.35;
-    }
-    return intent;
+        return intent;  // no actionable setup
+    };
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────
@@ -200,7 +239,8 @@ int main(int argc, char* argv[]) {
             alpha::backtest::BacktestRunState::BACKTEST_LOADING,
             token, 0, 0, symbol, "Loading ticks and signals");
 
-        alpha::backtest::SimRunner runner(cfg, signal_strategy);
+        // Fresh strategy instance per instrument — resets position state cleanly
+        alpha::backtest::SimRunner runner(cfg, make_strategy());
 
         try {
             // Load pre-computed signals from QuestDB (graceful fallback if absent)

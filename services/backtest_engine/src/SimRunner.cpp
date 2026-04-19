@@ -108,7 +108,7 @@ void SimRunner::process_batch(const models::BacktestTick* batch, size_t n) {
             double mark_pnl = static_cast<double>(open_side_) *
                               static_cast<double>(open_qty_) *
                               (static_cast<double>(tick.last_price) - open_entry_price_);
-            double current_equity = cfg_.starting_capital + mark_pnl;
+            double current_equity = equity_ + mark_pnl;
 
             if (current_equity > peak_equity_)
                 peak_equity_ = current_equity;
@@ -126,26 +126,28 @@ void SimRunner::execute_order(const models::OrderIntent& intent,
                                          intent.qty, intent.side);
 
     if (open_qty_ == 0) {
-        // ── Open new position ─────────────────────────────────────────────
+        // ── Open new position — longs only ────────────────────────────────
+        // Long-only: reject SELL signals (side <= 0) when flat to prevent
+        // accidental short positions in NSE cash equity.
+        if (intent.side <= 0) return;
+
         open_qty_          = intent.qty * intent.side;
         open_entry_price_  = exec_price;
         open_entry_ts_     = tick.timestamp_ns;
         open_side_         = intent.side;
         open_instrument_   = tick.instrument_token;
 
-    } else if (intent.side == -open_side_ || intent.reason == 2) {
-        // ── Close / reverse position ──────────────────────────────────────
+    } else if (open_qty_ != 0 && (intent.side == -open_side_ || intent.reason == 2)) {
+        // ── Close position ────────────────────────────────────────────────
         double gross_pnl = static_cast<double>(open_side_) *
                            static_cast<double>(std::abs(open_qty_)) *
                            (exec_price - open_entry_price_);
 
-        // Cost on entry was already applied; apply cost on exit too
-        double exit_cost = apply_cost_model(exec_price, std::abs(open_qty_), intent.side)
-                         - exec_price;  // cost delta
-        double commission = std::abs(exit_cost) * std::abs(open_qty_);
-        // Flat brokerage: both legs
-        commission += cfg_.brokerage_flat * 2.0;
-        commission += commission * cfg_.gst_rate;  // GST on brokerage
+        // STT, slippage, and exchange charges are already embedded in exec_price
+        // and open_entry_price_ via apply_cost_model — do NOT call it again here.
+        // Commission = flat brokerage for both legs + GST on brokerage only.
+        double brokerage  = cfg_.brokerage_flat * 2.0;
+        double commission = brokerage * (1.0 + cfg_.gst_rate);
 
         Trade t{};
         t.entry_ts_ns      = open_entry_ts_;

@@ -119,8 +119,9 @@ void BacktestResult::print() const {
     std::cout << std::fixed << std::setprecision(2);
     std::cout << "\n══════════════════ Backtest Results ══════════════════\n";
     std::cout << "  Net P&L          : ₹" << total_net_pnl << "\n";
-    std::cout << "  Gross P&L        : ₹" << total_gross_pnl << "\n";
-    std::cout << "  Total Commission : ₹" << total_commission << "\n";
+    std::cout << "  Gross P&L*       : ₹" << total_gross_pnl << "\n";
+    std::cout << "  Brokerage+GST    : ₹" << total_commission << "\n";
+    std::cout << "  (* slippage/STT/exchange charges embedded in exec prices)\n";
     std::cout << "  ───────────────────────────────────────────────────\n";
     std::cout << "  Total Trades     : " << total_trades << "\n";
     std::cout << "  Win Rate         : " << (win_rate * 100.0) << "%\n";
