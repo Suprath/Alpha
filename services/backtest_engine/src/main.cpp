@@ -43,6 +43,7 @@ static auto make_strategy() {
     struct State {
         bool    in_position   = false;
         double  entry_px      = 0.0;
+        int32_t entry_qty     = 0;
         int32_t position_bars = 0;   // bars held so far
         int32_t cooldown_bars = 0;   // bars until next entry allowed
     };
@@ -69,11 +70,12 @@ static auto make_strategy() {
 
         auto emit_exit = [&](int32_t cooldown) -> alpha::models::OrderIntent {
             intent.side           = -1;
-            intent.qty            = qty;
+            intent.qty            = state->entry_qty; // Use stored entry qty
             intent.reason         = 2;   // EXIT
             intent.confidence     = 0.80;
             state->in_position    = false;
             state->entry_px       = 0.0;
+            state->entry_qty      = 0;
             state->position_bars  = 0;
             state->cooldown_bars  = cooldown;
             return intent;
@@ -88,10 +90,10 @@ static auto make_strategy() {
                 return emit_exit(30);   // 30-bar cooldown after a stop
             }
 
-            // Signal-based exit — only after min-hold (15 bars) to avoid noise
-            if (state->position_bars >= 15 && sig && sig->valid_rsi) {
-                const bool rsi_exit = (sig->rsi_14 > 70.0);
-                const bool bb_exit  = (sig->valid_bb && sig->bb_pct_b > 0.92);
+            // Signal-based exit — only after min-hold (30 bars) to avoid noise
+            if (state->position_bars >= 30 && sig && sig->valid_rsi) {
+                const bool rsi_exit = (sig->rsi_14 > 75.0);
+                const bool bb_exit  = (sig->valid_bb && sig->bb_pct_b > 0.95);
                 if (rsi_exit || bb_exit) {
                     return emit_exit(20);
                 }
@@ -120,11 +122,12 @@ static auto make_strategy() {
         const double hist = sig->macd_histogram;
 
         // Primary setup: deep oversold + momentum inflecting + near lower BB
-        // RSI < 30: stock is genuinely oversold (not just correcting)
-        // hist > 0: MACD histogram just turned positive — buying pressure growing
-        // bb_pct_b < 0.25: price still in the lower quarter of the band
-        if (rsi < 30.0 && hist > 0.0) {
-            const bool bb_ok = !sig->valid_bb || sig->bb_pct_b < 0.25;
+        // RSI < 25: stock is genuinely oversold
+        // hist > 0: MACD histogram turned positive — buying pressure growing
+        // bb_pct_b < 0.15: price in the extreme lower quarter/edge of band
+        // volume > 100: ensure liquidity
+        if (rsi < 25.0 && hist > 0.0 && tick.volume > 100) {
+            const bool bb_ok = !sig->valid_bb || sig->bb_pct_b < 0.15;
             if (bb_ok) {
                 intent.side          = 1;
                 intent.qty           = qty;
@@ -132,6 +135,7 @@ static auto make_strategy() {
                 intent.confidence    = std::min(1.0, 0.50 + (30.0 - rsi) / 30.0 * 0.40);
                 state->in_position   = true;
                 state->entry_px      = price;
+                state->entry_qty     = qty;
                 state->position_bars = 0;
                 state->cooldown_bars = 0;
                 return intent;
@@ -139,15 +143,16 @@ static auto make_strategy() {
         }
 
         // Secondary: BB lower-band pierce — strong mean-reversion signal
-        // bb_pct_b < 0.05: price at or below 2-sigma lower band
-        // rsi < 45: not overbought; hist > -0.5: MACD not in free-fall
-        if (sig->valid_bb && sig->bb_pct_b < 0.05 && rsi < 45.0 && hist > -0.5) {
+        // bb_pct_b < 0.02: price at or below 2-sigma lower band edge
+        // rsi < 40: not overbought; hist > -0.2: MACD not in free-fall
+        if (sig->valid_bb && sig->bb_pct_b < 0.02 && rsi < 40.0 && hist > -0.2 && tick.volume > 100) {
             intent.side          = 1;
             intent.qty           = qty;
             intent.reason        = 1;
             intent.confidence    = 0.65;
             state->in_position   = true;
             state->entry_px      = price;
+            state->entry_qty     = qty;
             state->position_bars = 0;
             state->cooldown_bars = 0;
             return intent;

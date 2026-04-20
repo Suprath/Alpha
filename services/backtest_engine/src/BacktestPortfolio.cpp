@@ -39,19 +39,18 @@ bool BacktestPortfolio::apply_order(
     // Override timestamp with backtest tick time (not wall clock)
     mt.timestamp_ns = tick.timestamp_ns;
 
+    // Track realized PnL change for this trade
+    const double pnl_before = pm_->snapshot().gross_realized_pnl;
+
     // Apply to portfolio
     const bool accepted = pm_->apply_trade(mt);
     if (!accepted) return false;
 
-    // Record in ResultAggregator for Sharpe/drawdown metrics
-    // Map market::Trade → backtest::Trade
-    // Realized PnL is tracked in Position — compute the delta from this fill
-    // For the aggregator we use net_amount as proxy (positive = profit)
-    double net_pnl = (intent.side == -1)
-        ? mt.net_amount                           // SELL/EXIT: cash inflow − charges
-        : 0.0;                                    // BUY/ENTRY: PnL realized on close
+    const double pnl_after = pm_->snapshot().gross_realized_pnl;
+    const double net_pnl = pnl_after - pnl_before;
 
-    // Only record a trade when a position is closed (net_pnl meaningful)
+    // Only record a trade when a position is closed or reduced (net_pnl != 0.0)
+    // or if the reason was specifically an exit/reverse.
     if (net_pnl != 0.0 || intent.reason == 2 || intent.reason == 5) {
         backtest::Trade bt{};
         bt.entry_ts_ns      = tick.timestamp_ns;

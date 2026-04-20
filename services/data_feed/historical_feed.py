@@ -269,15 +269,46 @@ class UpstoxHistoricalFeed:
         self._known_holidays: set = _load_known_holidays()
 
     # ── QuestDB ILP write ──────────────────────────────────────────────────────
-
     def _connect_questdb(self) -> None:
+        """Establish or re-establish ILP socket connection."""
+        if self._qdb_sock:
+            try:
+                self._qdb_sock.close()
+            except Exception:
+                pass
+            self._qdb_sock = None
+
         self._qdb_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._qdb_sock.connect((QUESTDB_HOST, QUESTDB_ILP_PORT))
-        logger.info("[HistFeed] QuestDB ILP connected at %s:%d",
-                    QUESTDB_HOST, QUESTDB_ILP_PORT)
+        self._qdb_sock.settimeout(5.0)
+        try:
+            self._qdb_sock.connect((QUESTDB_HOST, QUESTDB_ILP_PORT))
+            logger.info("[HistFeed] QuestDB ILP connected at %s:%d",
+                        QUESTDB_HOST, QUESTDB_ILP_PORT)
+        except Exception as e:
+            logger.error("[HistFeed] Failed to connect to QuestDB ILP: %s", e)
+            self._qdb_sock = None
+
+    def _send_ilp_with_retry(self, line: str) -> None:
+        """Send a single Line Protocol string, reconnecting once if needed."""
+        data = line.encode()
+        for attempt in [1, 2]:
+            if not self._qdb_sock:
+                self._connect_questdb()
+
+            if not self._qdb_sock:
+                if attempt == 2:
+                    logger.error("[HistFeed] Dropping ILP line — QuestDB unreachable.")
+                continue
+
+            try:
+                self._qdb_sock.sendall(data)
+                return
+            except (socket.error, BrokenPipeError) as e:
+                logger.warning("[HistFeed] ILP send failed (attempt %d/2): %s", attempt, e)
+                self._connect_questdb()
 
     def _write_candle(self, candle: dict, symbol: str) -> None:
-        ts_ns = candle["timestamp_ns"]
+        ts_ns = candle["timestamp_ns"] or int(time.time() * 1e9)
         line = (
             f"candles,symbol={symbol},interval={self.interval} "
             f"open={candle['open']},"
@@ -288,7 +319,7 @@ class UpstoxHistoricalFeed:
             f"open_interest={candle['open_interest']}i "
             f"{ts_ns}\n"
         )
-        self._qdb_sock.sendall(line.encode())
+        self._send_ilp_with_retry(line)
 
     def _record_new_holidays(self, discovered: list) -> None:
         """
@@ -307,7 +338,7 @@ class UpstoxHistoricalFeed:
             # ILP: nse_holidays table — confirmed=1 is a placeholder field;
             # the designated timestamp column carries the holiday date.
             line = f"nse_holidays confirmed=1i {ts_ns}\n"
-            self._qdb_sock.sendall(line.encode())
+            self._send_ilp_with_retry(line)
             self._known_holidays.add(d)
 
         logger.info(
@@ -478,6 +509,18 @@ class UpstoxHistoricalFeed:
     # ── Main run ───────────────────────────────────────────────────────────────
 
     async def run(self) -> None:
+        # ── 0. Wait for QuestDB to be ready ───────────────────────────────────
+        logger.info("[HistFeed] Waiting for QuestDB ILP at %s:%d...",
+                    QUESTDB_HOST, QUESTDB_ILP_PORT)
+        for i in range(30):   # up to 30 seconds
+            try:
+                with socket.create_connection((QUESTDB_HOST, QUESTDB_ILP_PORT), timeout=1.0):
+                    break
+            except Exception:
+                await asyncio.sleep(1.0)
+                if i % 5 == 0 and i > 0:
+                    logger.info("[HistFeed] Still waiting for QuestDB...")
+
         self._connect_questdb()
 
         instruments = self._load_instruments()

@@ -288,7 +288,16 @@ services:
     image: alpha-signal-engine:latest    # Reuses same image as live signal-engine
     container_name: alpha-signal-engine-backtest
     restart: "no"  # Run-to-completion job
-    command: ["--backtest-batch"]
+    entrypoint: 
+      - sh
+      - -c
+      - |
+        if [ -z "$$BACKTEST_SYMBOL" ]; then
+          echo "[backtest-batch] Idle - waiting for TUI to trigger a run..."
+          sleep infinity
+        else
+          exec ./alpha-signal-engine --backtest-batch
+        fi
     environment:
       - TZ=Asia/Kolkata
       - QUESTDB_HOST=questdb

@@ -48,22 +48,29 @@ struct Position {
         total_charges += charges;
 
         if (qty == 0) {
-            avg_cost     = fill_price;
+            // Opening a new position: include charges in avg_cost (true cost basis)
+            avg_cost     = fill_price + (charges / std::abs(fill_qty) / lot_size);
             opened_at_ns = ts_ns;
         } else if ((qty > 0 && fill_qty > 0) || (qty < 0 && fill_qty < 0)) {
-            // Scaling in same direction — recalculate VWAP
-            double total_cost = avg_cost * std::abs(qty) + fill_price * std::abs(fill_qty);
-            avg_cost = total_cost / (std::abs(qty) + std::abs(fill_qty));
+            // Scaling in same direction — recalculate VWAP with charges
+            double current_total_cost = avg_cost * std::abs(qty);
+            double fill_total_cost    = (fill_price * std::abs(fill_qty) * lot_size + charges) / lot_size;
+            avg_cost = (current_total_cost + fill_total_cost) / (std::abs(qty) + std::abs(fill_qty));
         } else {
             // Reducing or reversing
             int32_t closing = std::min(std::abs(fill_qty), std::abs(qty));
+            
+            // realized_pnl = (exit_price - avg_cost) * qty_closed - closing_charges
+            // Since charges are per-fill, we subtract the full fill charges for the closing leg
             double  pnl_per_unit = (fill_price - avg_cost) * lot_size * (qty > 0 ? 1.0 : -1.0);
-            realized_pnl += closing * pnl_per_unit - charges;
+            realized_pnl += (closing * pnl_per_unit) - charges;
 
             int32_t new_qty = qty + fill_qty;
             if (new_qty != 0 && ((qty > 0 && new_qty < 0) || (qty < 0 && new_qty > 0))) {
-                // Reversal: new position starts at fill_price
-                avg_cost     = fill_price;
+                // Reversal: new position starts at fill_price + its share of charges
+                int32_t net_new_qty = std::abs(new_qty);
+                double  pro_rata_charges = (static_cast<double>(net_new_qty) / std::abs(fill_qty)) * charges;
+                avg_cost     = fill_price + (pro_rata_charges / net_new_qty / lot_size);
                 opened_at_ns = ts_ns;
             }
         }

@@ -583,3 +583,13 @@ class BacktestModal(ModalScreen):
             safe = clean[-600:].replace("[", "\\[")
             lines += [f"[{GR}]── results ──[/]", f"[dim]{safe}[/dim]"]
             self._update(lines)
+
+        # ── Auto-close on success ─────────────────────────────────────────────
+        if any("✓ Simulation complete" in ln for ln in lines):
+            lines.append(f"\n[{G}]✓ Pipeline finished. Closing automatically in 3s...[/]")
+            self._update(lines)
+            await asyncio.sleep(3.0)
+            try:
+                self.dismiss()
+            except Exception:
+                pass  # Already dismissed via Cancel?

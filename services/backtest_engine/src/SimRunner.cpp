@@ -127,8 +127,6 @@ void SimRunner::execute_order(const models::OrderIntent& intent,
 
     if (open_qty_ == 0) {
         // ── Open new position — longs only ────────────────────────────────
-        // Long-only: reject SELL signals (side <= 0) when flat to prevent
-        // accidental short positions in NSE cash equity.
         if (intent.side <= 0) return;
 
         open_qty_          = intent.qty * intent.side;
@@ -143,11 +141,17 @@ void SimRunner::execute_order(const models::OrderIntent& intent,
                            static_cast<double>(std::abs(open_qty_)) *
                            (exec_price - open_entry_price_);
 
-        // STT, slippage, and exchange charges are already embedded in exec_price
-        // and open_entry_price_ via apply_cost_model — do NOT call it again here.
-        // Commission = flat brokerage for both legs + GST on brokerage only.
-        double brokerage  = cfg_.brokerage_flat * 2.0;
-        double commission = brokerage * (1.0 + cfg_.gst_rate);
+        // Realistic Indian Brokerage (Zerodha-style): min(₹20, 0.03% of turnover)
+        // Calculated for both entry and exit legs.
+        auto calc_leg_brokerage = [&](double price, int32_t qty) {
+            double turnover       = price * std::abs(qty);
+            double pct_brokerage  = turnover * 0.0003; // 0.03%
+            double brokerage      = std::min(cfg_.brokerage_flat, pct_brokerage);
+            return brokerage * (1.0 + cfg_.gst_rate);  // Include GST
+        };
+
+        double commission = calc_leg_brokerage(open_entry_price_, open_qty_) +
+                            calc_leg_brokerage(exec_price, open_qty_);
 
         Trade t{};
         t.entry_ts_ns      = open_entry_ts_;
@@ -180,16 +184,34 @@ double SimRunner::apply_cost_model(double price, int32_t qty, int32_t side) cons
     double slip = price * cfg_.slippage_bps / 10000.0;
     double exec_price = (side > 0) ? (price + slip) : (price - slip);
 
-    // STT on sell side (0.1% of turnover)
+    // --- Regulatory Charges (NSE/SEBI/STT) ---
+    // These are amortized into the per-share execution price.
+    // Charges must INCREASE buy price and DECREASE sell price.
+    
+    double turnover = exec_price * std::abs(qty);
+    double charges_inr = 0.0;
+
+    // 1. STT (Securities Transaction Tax): 0.025% on SELL only for intraday
     if (side < 0) {
-        double stt = exec_price * std::abs(qty) * cfg_.stt_rate;
-        exec_price -= stt / std::abs(qty);  // Amortize STT into per-share price
+        charges_inr += turnover * 0.00025; 
     }
 
-    // Exchange transaction charge + SEBI
-    double turnover = exec_price * std::abs(qty);
-    double exch_charge = turnover * (cfg_.exchange_txn_charge + cfg_.sebi_charge);
-    exec_price -= (side > 0 ? 1.0 : -1.0) * exch_charge / std::abs(qty);
+    // 2. Exchange Transaction Tax (NSE): 0.00345%
+    charges_inr += turnover * cfg_.exchange_txn_charge;
+
+    // 3. SEBI Turnover Fee: 0.0001%
+    charges_inr += turnover * cfg_.sebi_charge;
+
+    // 4. GST on (Exchange + SEBI) @ 18%
+    // Note: Brokerage GST is handled in execute_order separately
+    charges_inr += (turnover * (cfg_.exchange_txn_charge + cfg_.sebi_charge)) * cfg_.gst_rate;
+
+    // Apply to price: Buy pays more(+), Sell receives less(-)
+    if (side > 0) {
+        exec_price += charges_inr / std::abs(qty);
+    } else {
+        exec_price -= charges_inr / std::abs(qty);
+    }
 
     return exec_price;
 }
