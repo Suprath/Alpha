@@ -65,7 +65,6 @@ class UpstoxLiveFeed:
         """Call Upstox REST to get an authorized one-time WebSocket URI."""
         headers = {
             "Authorization": f"Bearer {self.access_token}",
-            "Api-Version":   "2.0",
             "Accept":        "application/json",
         }
         async with aiohttp.ClientSession() as session:
@@ -198,15 +197,13 @@ class UpstoxLiveFeed:
         while True:
             try:
                 uri = await self._authorize()
-                headers = {"Api-Version": "2.0"}
                 async with websockets.connect(uri, ssl=ssl_ctx,
-                                              extra_headers=headers,
                                               compression=None,
                                               ping_interval=20,
                                               ping_timeout=20) as ws:
                     backoff = 1
                     subscribed = False
-                    logger.info("[LiveFeed] Streaming (Api-Version: 2.0, no-comp)…")
+                    logger.info("[LiveFeed] Streaming (no-comp)…")
 
 
                     last_heartbeat = time.time()
