@@ -101,6 +101,9 @@ void SimRunner::process_batch(const models::BacktestTick* batch, size_t n) {
         // Execute if qty > 0 (qty=0 means "no action" from strategy)
         if (intent.qty != 0 && intent.side != 0) {
             execute_order(intent, tick);
+        } else if (sig && sig->valid_composite) {
+             // Optional: log or track rejections for hysteresis analysis
+             // (Avoid spamming in tick loop, maybe keep a counter)
         }
 
         // Update open position P&L
@@ -124,6 +127,16 @@ void SimRunner::execute_order(const models::OrderIntent& intent,
                                const models::BacktestTick& tick) {
     double exec_price = apply_cost_model(static_cast<double>(tick.last_price),
                                          intent.qty, intent.side);
+
+    const char* side_str = (intent.side > 0) ? "BUY" : "SELL";
+    const char* reason_str = (intent.reason == 1) ? "ENTRY" : 
+                             (intent.reason == 2) ? "EXIT" : 
+                             (intent.reason == 3) ? "REVERSE" : "SCALE";
+
+    // Detailed execution log (matches live logging style)
+    std::cout << "[EXEC] " << side_str << " " << intent.qty << " TOKEN_" << tick.instrument_token 
+              << " @ " << exec_price << " (" << reason_str << ")" 
+              << " equity=" << equity_ << "\n";
 
     if (open_qty_ == 0) {
         // ── Open new position — longs only ────────────────────────────────

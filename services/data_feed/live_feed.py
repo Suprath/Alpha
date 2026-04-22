@@ -80,16 +80,19 @@ class UpstoxLiveFeed:
     # ── subscription ─────────────────────────────────────────────────────────
 
     async def _subscribe(self, ws) -> None:
+        import uuid
         msg = json.dumps({
-            "guid":   "alpha-live-feed",
+            "guid":   str(uuid.uuid4()),
             "method": "sub",
             "data": {
                 "instrumentKeys": self.instrument_keys,
-                "mode":           "full_d30",
+                "mode":           "full",
             },
         })
-        await ws.send(msg)
-        logger.info("[LiveFeed] Subscribed to %d instruments: %s",
+        # CRITICAL: Upstox V3 requires binary format for requests
+        await ws.send(msg.encode('utf-8'))
+        logger.info("[LiveFeed] Sent sub (binary): %s", msg)
+        logger.info("[LiveFeed] Subscribed to %d instruments (mode=full): %s",
                     len(self.instrument_keys), self.instrument_keys)
 
     # ── protobuf decode ───────────────────────────────────────────────────────
@@ -97,13 +100,25 @@ class UpstoxLiveFeed:
     def _decode(self, raw: bytes) -> list[atpb.Tick]:
         """Decode an Upstox FeedResponse and return a list of alpha_tick Tick protos."""
         resp = pb.FeedResponse()
-        resp.ParseFromString(raw)
+        try:
+            resp.ParseFromString(raw)
+        except Exception as e:
+            logger.error("[LiveFeed] Failed to parse protobuf: %s", e)
+            return []
+
+        # Debug: log the type if it's not a standard feed
+        if resp.type != 0:
+            logger.info("[LiveFeed] msg type=%d", resp.type)
 
         if resp.type == pb.market_info:
             for seg, status in resp.marketInfo.segmentStatus.items():
                 if "NSE_EQ" in seg:
                     logger.info("[LiveFeed] Market status %s=%s",
                                 seg, pb.MarketStatus.Name(status))
+            return []
+
+        if not resp.feeds:
+            # Log periodic empty feed messages if they happen
             return []
 
         ticks = []
@@ -138,6 +153,7 @@ class UpstoxLiveFeed:
                     if tick.bids:
                         tick.bid_price = tick.bids[0].price
                         tick.bid_size  = tick.bids[0].quantity
+                    if tick.asks:
                         tick.ask_price = tick.asks[0].price
                         tick.ask_size  = tick.asks[0].quantity
 
@@ -182,38 +198,61 @@ class UpstoxLiveFeed:
         while True:
             try:
                 uri = await self._authorize()
+                headers = {"Api-Version": "2.0"}
                 async with websockets.connect(uri, ssl=ssl_ctx,
+                                              extra_headers=headers,
+                                              compression=None,
                                               ping_interval=20,
                                               ping_timeout=20) as ws:
                     backoff = 1
                     subscribed = False
-                    logger.info("[LiveFeed] Streaming…")
+                    logger.info("[LiveFeed] Streaming (Api-Version: 2.0, no-comp)…")
 
-                    async for raw in ws:
-                        msgs_received += 1
-                        if msgs_received <= 20 or msgs_received % 100 == 0:
-                            logger.info("[LiveFeed] msg#%d type=%s size=%d bytes",
-                                        msgs_received,
-                                        "bytes" if isinstance(raw, bytes) else "text",
-                                        len(raw))
-                        if isinstance(raw, bytes):
-                            ticks = self._decode(raw)
-                            # Subscribe after receiving the initial market_info handshake
-                            if not subscribed:
-                                await self._subscribe(ws)
-                                subscribed = True
-                            for tick in ticks:
-                                await self._publish(tick)
-                                ticks_published += 1
-                                if ticks_published % 500 == 0:
-                                    logger.info("[LiveFeed] %d ticks published to Redis",
-                                                ticks_published)
-                        else:
-                            logger.info("[LiveFeed] Text msg#%d: %s", msgs_received, raw[:120])
-                            # Subscribe after text handshake if not yet subscribed
-                            if not subscribed:
-                                await self._subscribe(ws)
-                                subscribed = True
+
+                    last_heartbeat = time.time()
+
+                    while True:
+                        try:
+                            # Use wait_for to implement a heartbeat/status check
+                            raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                            msgs_received += 1
+                            
+                            if msgs_received <= 100 or msgs_received % 1000 == 0:
+                                logger.info("[LiveFeed] msg#%d type=%s size=%d bytes",
+                                            msgs_received,
+                                            "bytes" if isinstance(raw, bytes) else "text",
+                                            len(raw))
+
+                            
+                            if isinstance(raw, bytes):
+                                ticks = self._decode(raw)
+                                # Subscribe after receiving the initial market_info handshake (msg type 2)
+                                if not subscribed:
+                                    await self._subscribe(ws)
+                                    subscribed = True
+                                for tick in ticks:
+                                    await self._publish(tick)
+                                    ticks_published += 1
+                                    if ticks_published % 500 == 0:
+                                        logger.info("[LiveFeed] %d ticks published to Redis",
+                                                    ticks_published)
+                            else:
+                                logger.info("[LiveFeed] Text msg#%d: %s", msgs_received, str(raw)[:120])
+                                if not subscribed:
+                                    await self._subscribe(ws)
+                                    subscribed = True
+
+
+
+                        except asyncio.TimeoutError:
+                            # Periodic status log
+                            now = time.time()
+                            if now - last_heartbeat >= 30:
+                                logger.info("[LiveFeed] Heartbeat: msgs=%d ticks=%d", 
+                                            msgs_received, ticks_published)
+                                last_heartbeat = now
+                            continue
+
 
             except (websockets.ConnectionClosed,
                     aiohttp.ClientError,
@@ -227,3 +266,4 @@ class UpstoxLiveFeed:
 
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
+

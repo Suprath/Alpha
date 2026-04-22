@@ -162,6 +162,62 @@ static auto make_strategy() {
     };
 }
 
+// ── Alpha Strategy factory — aligns with live StrategyEngine.cpp logic ───────
+//
+// Uses the pre-computed composite_score and kelly_fraction from BacktestSignal.
+// Implements the same hysteresis and minimum trade size logic as the live bot.
+static auto make_alpha_strategy() {
+    struct State {
+        int32_t current_qty   = 0;
+        double  last_kelly    = 0.0;
+    };
+    auto state = std::make_shared<State>();
+
+    const int32_t MAX_UNITS = 100;
+    const int32_t MIN_TRADE = 10;
+    const double  HYST      = 0.05;
+
+    return [state, MAX_UNITS, MIN_TRADE, HYST](
+        const alpha::models::BacktestTick&    tick,
+        const alpha::backtest::BacktestClock& /*clock*/,
+        const alpha::models::BacktestSignal*  sig
+    ) -> alpha::models::OrderIntent {
+
+        alpha::models::OrderIntent intent{};
+        intent.timestamp_ns     = tick.timestamp_ns;
+        intent.instrument_token = tick.instrument_token;
+        intent.price            = static_cast<double>(tick.last_price);
+        intent.strategy_id      = 4; // CompositeScore
+
+        if (!sig || !sig->valid_composite) return intent;
+
+        const int32_t action      = (sig->composite_score > 0.0) ? 1 : -1;
+        const int32_t desired_qty = action * static_cast<int32_t>(std::round(MAX_UNITS * sig->kelly_fraction));
+        const int32_t delta       = desired_qty - state->current_qty;
+
+        if (delta == 0) return intent;
+
+        // ── Hysteresis & Min Trade Size (Sync with StrategyEngine.cpp) ────────
+        bool is_flipping = (state->current_qty > 0 && desired_qty < 0) || 
+                           (state->current_qty < 0 && desired_qty > 0);
+        bool significant = std::abs(delta) >= MIN_TRADE || 
+                           std::abs(sig->kelly_fraction - state->last_kelly) >= HYST;
+
+        if (is_flipping || significant) {
+            intent.qty        = std::abs(delta);
+            intent.side       = (delta > 0) ? 1 : -1;
+            intent.reason     = (state->current_qty == 0) ? 1 : (is_flipping ? 3 : 4); // ENTRY, REVERSE, SCALE
+            intent.confidence = sig->kelly_fraction;
+            
+            state->current_qty += delta;
+            state->last_kelly   = sig->kelly_fraction;
+            return intent;
+        }
+
+        return intent;
+    };
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
@@ -244,8 +300,15 @@ int main(int argc, char* argv[]) {
             alpha::backtest::BacktestRunState::BACKTEST_LOADING,
             token, 0, 0, symbol, "Loading ticks and signals");
 
-        // Fresh strategy instance per instrument — resets position state cleanly
-        alpha::backtest::SimRunner runner(cfg, make_strategy());
+        // Select strategy: standard RSI/MACD or the live-aligned Alpha strategy
+        alpha::backtest::SimRunner::StrategyFn strategy_fn;
+        if (get_env("USE_ALPHA_STRATEGY") == "1") {
+            strategy_fn = make_alpha_strategy();
+        } else {
+            strategy_fn = make_strategy();
+        }
+
+        alpha::backtest::SimRunner runner(cfg, std::move(strategy_fn));
 
         try {
             // Load pre-computed signals from QuestDB (graceful fallback if absent)

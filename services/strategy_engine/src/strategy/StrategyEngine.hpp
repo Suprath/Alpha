@@ -21,6 +21,8 @@ namespace alpha::strategy {
 class StrategyEngine {
 public:
     static constexpr int32_t MAX_UNITS = 100; // One NSE lot
+    static constexpr int32_t MIN_TRADE_QTY = 10; // Don't trade for less than 10 shares
+    static constexpr double  HYSTERESIS_THRESHOLD = 0.05; // 5% capacity change required
 
     explicit StrategyEngine(RiskParams risk_params = {});
 

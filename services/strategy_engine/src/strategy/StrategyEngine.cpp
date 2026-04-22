@@ -25,7 +25,16 @@ bool StrategyEngine::on_signal(const alpha::models::Signal& sig, OrderIntent& ou
     int32_t   current_qty = pos.qty;
     int32_t   delta = desired_qty - current_qty;
 
-    if (delta == 0) return false; // No change needed
+    // ── Hysteresis & Min Trade Size ───────────────────────────────────────────
+    // 1. Always trade if signal direction flips (Long -> Short or vice versa)
+    bool is_flipping = (current_qty > 0 && desired_qty < 0) || (current_qty < 0 && desired_qty > 0);
+    // 2. Otherwise, requires minimum lot size OR significant change in confidence
+    bool significant_change = std::abs(delta) >= MIN_TRADE_QTY || 
+                              std::abs(sig.confidence - (static_cast<double>(std::abs(current_qty)) / MAX_UNITS)) >= HYSTERESIS_THRESHOLD;
+
+    if (delta == 0 || (!is_flipping && !significant_change)) {
+        return false; 
+    }
 
     // Pre-trade risk check
     if (!risk_.allow(desired_qty, total_realized_pnl())) {
@@ -47,6 +56,7 @@ bool StrategyEngine::on_signal(const alpha::models::Signal& sig, OrderIntent& ou
     out.symbol[sizeof(out.symbol) - 1] = '\0';
 
     // Simulate fill (assume market order fills at signal price)
+    // Pass default cost model (brokerage + slippage)
     pos.apply_fill(delta, sig.price, out.timestamp_ns);
 
     log_intent(out, pos);
@@ -92,7 +102,8 @@ void StrategyEngine::log_intent(const OrderIntent& intent, const Position& pos) 
               << " @ " << intent.price
               << " | net_pos=" << pos.qty
               << " | kelly=" << std::setprecision(3) << intent.confidence
-              << " | rpnl=" << std::setprecision(2) << pos.realized_pnl
+              << " | costs=" << std::setprecision(2) << pos.total_costs
+              << " | net_pnl=" << pos.realized_pnl
               << " | total_pnl=" << total_realized_pnl()
               << "\n";
 }

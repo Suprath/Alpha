@@ -58,6 +58,11 @@ struct BacktestSignal {
     double   vwap_deviation;        // (close − session_vwap) / session_vwap
     double   session_vwap;          // Cumulative VWAP since session open
     bool     valid_vwap_dev;        // true after first bar with volume > 0
+
+    // ── Alpha Composite (Added for alignment with live StrategyEngine) ────────
+    double   composite_score;       // IC-weighted signal score
+    double   kelly_fraction;        // Final position sizing fraction ∈ [0, 1]
+    bool     valid_composite;       // true after normalizers and kf warmup
 };
 
 } // namespace alpha::models

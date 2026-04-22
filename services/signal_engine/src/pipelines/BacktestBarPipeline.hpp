@@ -31,11 +31,15 @@
 #include <signals/bar/MACD.hpp>
 #include <signals/bar/BollingerBands.hpp>
 #include <signals/bar/VWAPDeviation.hpp>
+#include <signals/derived/SignalBundle.hpp>
+#include <signals/derived/SignalNormalizer.hpp>
+#include <signals/derived/CompositeScore.hpp>
 #include <alpha/models/BacktestSignal.hpp>
 
 namespace bbt_sig  = alpha::signal::bar_sig;
 namespace bar_core = alpha::signal::core;
 namespace live_bar = alpha::signal::signals::bar;
+namespace derived  = alpha::signal::signals::derived;
 
 namespace alpha::signal::pipelines {
 
@@ -105,6 +109,26 @@ public:
         sig.session_vwap    = vd.valid ? vd.session_vwap : 0.0;
         sig.valid_vwap_dev  = vd.valid;
 
+        // ── Alpha Composite ───────────────────────────────────────────────────
+        derived::SignalBundle bundle;
+        bundle.instrument_token = bar.instrument_token;
+        bundle.timestamp_ns     = bar.timestamp_ns;
+        bundle[derived::OFI_NORM]    = 0.0; // Orderflow unavailable
+        bundle[derived::TRADE_DIR]   = 0.0;
+        bundle[derived::VPIN]        = 0.0;
+        bundle[derived::KYLE_LAMBDA] = 0.0;
+        bundle[derived::ENTROPY]     = 0.0;
+        bundle[derived::LOG_RETURN]  = lr.valid ? lr.r : 0.0;
+        bundle[derived::RV_ANN]      = rv.valid ? rv.sigma_ann : 0.0;
+        bundle[derived::BAR_OFI]     = 0.0;
+
+        const auto norm = normalizer_.update(bundle);
+        const auto comp = composite_.compute(norm);
+
+        sig.composite_score  = comp.valid ? comp.score : 0.0;
+        sig.kelly_fraction   = comp.valid ? comp.kelly_half : 0.0;
+        sig.valid_composite  = comp.valid;
+
         // ── Write to QuestDB ──────────────────────────────────────────────────
         const std::string symbol = "TOKEN_" + std::to_string(bar.instrument_token);
         qdb_.write_backtest_signal(sig, symbol);
@@ -133,6 +157,9 @@ private:
     bbt_sig::MACDCalculator                 macd_;
     bbt_sig::BollingerBandsCalculator       bb_;
     bbt_sig::VWAPDeviationCalculator        vwap_dev_;
+
+    derived::SignalNormalizer               normalizer_;
+    derived::CompositeScoreCalculator       composite_;
 
     uint64_t bars_processed_  = 0;
     uint64_t last_session_ts_ = 0;  // Day number of last session reset

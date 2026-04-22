@@ -42,8 +42,8 @@ namespace derived  = alpha::signal::signals::derived;
 
 namespace alpha::signal::pipelines {
 
-/// Minimum Kelly fraction to open/maintain a position (5% of capital)
-static constexpr double MIN_KELLY_TO_TRADE = 0.05;
+/// Minimum Kelly fraction to open/maintain a position (10% of capital)
+static constexpr double MIN_KELLY_TO_TRADE = 0.10;
 /// Fixed position size (shares/lots) — replace with account-fraction sizing later
 static constexpr uint64_t DEFAULT_POSITION_SIZE = 100u;
 
