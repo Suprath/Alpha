@@ -54,7 +54,6 @@ int main() {
 
     // -- SHM Reader: consumes OrderIntents from strategy engine --
     alpha::market::ShmReader reader("alpha_order_shm_v1", "order_queue");
-    reader.wait_for_attachment();
 
     // -- Market Engine: paper trading + portfolio --
     alpha::market::MarketEngine engine(starting_capital, redis_host, redis_port);

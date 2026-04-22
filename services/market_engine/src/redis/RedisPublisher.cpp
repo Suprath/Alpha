@@ -95,7 +95,7 @@ void RedisPublisher::publish_portfolio(
 
     // HSET alpha:portfolio data <binary>  (binary-safe via redisCommandArgv)
     const char* argv[] = {"HSET", "alpha:portfolio", "data", bytes.data()};
-    const size_t lens[] = {4, 17, 4, bytes.size()};
+    const size_t lens[] = {4, 15, 4, bytes.size()};
     cmd_binary(4, argv, lens);
 }
 

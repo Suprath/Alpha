@@ -311,13 +311,11 @@ class SignalsPanel(Widget):
     def _render(self, raw: str) -> None:
         for line in raw.splitlines():
             lower = line.lower()
-            if ("ofi=" in lower or "ofi" in lower) and (
-                "fire" in lower or "threshold" in lower or "signal" in lower
-            ):
+            if "[ofi]" in lower or "ofi=" in lower:
                 if line not in self._seen:
                     self._signals.appendleft(line.strip()[:120])
                     self._seen.add(line)
-            elif "[order]" in lower and "entry" in lower:
+            elif "[trade" in lower:
                 if line not in self._seen:
                     self._signals.appendleft(line.strip()[:120])
                     self._seen.add(line)

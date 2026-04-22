@@ -24,7 +24,15 @@ void ShmReader::wait_for_attachment() {
 }
 
 bool ShmReader::poll(alpha::models::OrderIntent& intent) {
-    if (!ring_buffer_) return false;
+    if (!ring_buffer_) {
+        try {
+            ring_buffer_ = shm_manager_->get_or_create_buffer<
+                alpha::ipc::SPSCRingBuffer<alpha::models::OrderIntent, 4096>>(buffer_name_);
+            std::cout << "[ShmReader] Attached to order SHM segment." << std::endl;
+        } catch (...) {
+            return false;
+        }
+    }
     return ring_buffer_->pop(intent);
 }
 
