@@ -44,14 +44,20 @@ BacktestResult SimRunner::run(const std::string& alpha_file_path,
     run(ticks, count, signals);
 
     loader_.close_file();
-    return aggregator_.compute();
+    BacktestResult r = aggregator_.compute();
+    r.final_equity = equity_;
+    return r;
 }
 
 BacktestResult SimRunner::run(const models::BacktestTick* ticks,
                                size_t                      count,
                                const SignalMap&             signals) {
     signals_ = signals.empty() ? nullptr : &signals;
-    if (ticks == nullptr || count == 0) return aggregator_.compute();
+    if (ticks == nullptr || count == 0) {
+        BacktestResult r = aggregator_.compute();
+        r.final_equity = equity_;
+        return r;
+    }
 
     const size_t batch = cfg_.batch_size;
     size_t offset = 0;

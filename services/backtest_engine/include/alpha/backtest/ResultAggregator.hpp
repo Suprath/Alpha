@@ -56,6 +56,9 @@ struct BacktestResult {
     double   largest_loss{0.0};
     double   expectancy{0.0};        // win_rate × avg_win − loss_rate × |avg_loss|
 
+    // True final portfolio equity (starting_capital + all realized PnL after forced close)
+    double   final_equity{0.0};
+
     void print() const;
 };
 

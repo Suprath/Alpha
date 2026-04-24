@@ -331,7 +331,7 @@ int main(int argc, char* argv[]) {
             alpha::backtest::BacktestResult result = runner.run(file, signals);
             result.print();
 
-            const double final_eq = cfg.starting_capital + result.total_net_pnl;
+            const double final_eq = result.final_equity;
             publisher.publish_result(result, token, symbol, cfg.starting_capital, final_eq);
             publisher.publish_status(
                 alpha::backtest::BacktestRunState::BACKTEST_DONE,
