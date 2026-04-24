@@ -569,13 +569,13 @@ TEST(EntropyTest, UniformDistributionMaximizesEntropy) {
     EXPECT_NEAR(res.H, expected_H, 1e-4f);
 }
 
-TEST(EntropyTest, HNormalizedIsDividedByLn10) {
+TEST(EntropyTest, HNormalizedIsDividedByLn5) {
     EntropyCalculator calc;
     alpha::models::Tick tick{};
     tick.instrument_token = 60004;
     for (int i = 0; i < 5; ++i) tick.bids[i].quantity = 100;
     auto res = calc.compute(tick);
-    EXPECT_NEAR(res.H_normalized, res.H / LN_10, 1e-5f);
+    EXPECT_NEAR(res.H_normalized, res.H / LN_5, 1e-5f);
 }
 
 TEST(EntropyTest, HNormalizedInValidRange) {
@@ -958,10 +958,15 @@ TEST(CUSUMTest, CustomParams) {
     const uint32_t token = 120008;
     calc.set_params(token, 1e-3, 1.0); // larger c, different lambda
     auto res = calc.update(token, 0.01, 0.005, 0.0001);
-    EXPECT_TRUE(res.valid);
-    // Threshold: ln(0.005/1e-3) - 1.0 * 0.0001 / 0.000025 = ln(5) - 4.0
-    const double expected = std::log(0.005 / 1e-3) - 1.0 * 0.0001 / (0.005 * 0.005);
-    EXPECT_NEAR(res.threshold, expected, 1e-10);
+    // Threshold: ln(|alpha_hat| / c) - lambda * variance / alpha_sq
+    //   = ln(0.005/1e-3) - 1.0 * 0.0001 / (0.005^2)
+    //   = ln(5) - 4.0 ≈ 1.609 - 4.0 = -2.391  (negative)
+    // With threshold <= 0 the CUSUM guard suppresses alarms and returns valid=false.
+    const double expected_threshold = std::log(0.005 / 1e-3) - 1.0 * 0.0001 / (0.005 * 0.005);
+    EXPECT_NEAR(res.threshold, expected_threshold, 1e-10); // threshold is still computed
+    EXPECT_LE(res.threshold, 0.0);                         // confirm it is negative
+    EXPECT_FALSE(res.valid);                               // suppressed during warm-up
+    EXPECT_FALSE(res.fired);                               // no spurious alarm
 }
 
 // ─── GEXCalculator Tests ──────────────────────────────────────────────────────
@@ -1585,8 +1590,10 @@ static alpha::signal::core::EnhancedBar make_close_bar(uint32_t token, double cl
 
 TEST(RSICalculatorTest, NotValidBeforeWarmup) {
     RSICalculator calc;
-    // Need RSI_PERIOD (14) bars to seed; first bar initialises prev_close only
-    for (uint32_t i = 0; i < RSI_PERIOD - 1; ++i) {
+    // Bar 1 seeds prev_close (no diff). Bars 2..RSI_PERIOD+1 accumulate
+    // RSI_PERIOD diffs. Seed fires at count == RSI_PERIOD + 1 (15th bar).
+    // Bars 0 .. RSI_PERIOD-1 (first RSI_PERIOD calls) must all be invalid.
+    for (uint32_t i = 0; i < RSI_PERIOD; ++i) {
         auto res = calc.update(make_close_bar(200001, 100.0 + i));
         EXPECT_FALSE(res.valid) << "bar " << i << " should not yet be valid";
     }
@@ -1594,9 +1601,10 @@ TEST(RSICalculatorTest, NotValidBeforeWarmup) {
 
 TEST(RSICalculatorTest, ValidAtSeedBar) {
     RSICalculator calc;
-    for (uint32_t i = 0; i <= RSI_PERIOD - 1; ++i) {
+    // RSI_PERIOD+1 bars are needed: 1 to seed prev_close + RSI_PERIOD diffs.
+    for (uint32_t i = 0; i <= RSI_PERIOD; ++i) {
         auto res = calc.update(make_close_bar(200002, 100.0 + i));
-        if (i == RSI_PERIOD - 1)
+        if (i == RSI_PERIOD)
             EXPECT_TRUE(res.valid);
     }
 }
@@ -1651,7 +1659,8 @@ TEST(RSICalculatorTest, MultiInstrumentStateIsolation) {
 
 TEST(RSICalculatorTest, ResetClearsState) {
     RSICalculator calc;
-    for (uint32_t i = 0; i <= RSI_PERIOD; ++i)
+    // RSI_PERIOD+1 bars to warm up fully
+    for (uint32_t i = 0; i <= RSI_PERIOD + 1; ++i)
         calc.update(make_close_bar(200008, 100.0 + i));
     calc.reset();
     auto res = calc.update(make_close_bar(200008, 110.0));

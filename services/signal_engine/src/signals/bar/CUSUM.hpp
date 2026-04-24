@@ -137,7 +137,20 @@ public:
         const double threshold = ln_term - decay_term;
 
         // ── Alarm detection ───────────────────────────────────────────────────
-        // threshold must be positive to be meaningful; if ≤ 0 always fires.
+        // threshold must be positive to be meaningful.
+        // If |α̂| < c (e.g. early in session before KF converges), ln_term is
+        // negative and threshold ≤ 0 — suppress all alarms until KF warms up.
+        if (threshold <= 0.0) {
+            result.C_plus     = s.C_plus;
+            result.C_minus    = s.C_minus;
+            result.threshold  = threshold;
+            result.fired_up   = false;
+            result.fired_down = false;
+            result.fired      = false;
+            result.valid      = false; // warm-up: threshold not meaningful yet
+            return result;
+        }
+
         const bool fired_up   = (s.C_plus  >= threshold);
         const bool fired_down = (s.C_minus >= threshold);
 

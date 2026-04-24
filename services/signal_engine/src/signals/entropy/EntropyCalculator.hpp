@@ -16,10 +16,11 @@
  *   H(t) = -Σ_{k=1}^{5} p_k · ln(p_k)      (0 · ln 0 ≡ 0)
  *
  * Normalized entropy:
- *   H_hat(t) = H(t) / ln(10)                ∈ [0, 1]
+ *   H_hat(t) = H(t) / ln(5)                ∈ [0, 1]
  *
- * Normalization constant ln(10) ≈ 2.302585 is the maximum entropy when
- * treating 5 bid + 5 ask levels as 10 independent uniform contributions.
+ * Normalization constant ln(5) ≈ 1.6094 is the maximum Shannon entropy for
+ * 5 equal-probability bins (the 5 combined bid+ask levels used here).
+ * Using ln(10) would be wrong — there are only 5 p_k values summing to 1.
  *
  * Design goals:
  *   - Zero heap allocation
@@ -41,16 +42,17 @@ namespace alpha::signal::signals::entropy {
 
 static constexpr uint32_t ENTROPY_DEPTH_LEVELS = 5u;
 
-/// Maximum entropy divisor: ln(10) ≈ 2.302585
-/// (5 bid levels + 5 ask levels treated as 10 uniform contributions)
-static constexpr float LN_10 = 2.302585092994046f;
+/// Maximum entropy divisor: ln(5) ≈ 1.6094
+/// The entropy is computed over 5 combined (bid+ask) levels, so uniform
+/// distribution over 5 bins gives H_max = ln(5).
+static constexpr float LN_5 = 1.6094379124341003f;
 
 // ─── Result ──────────────────────────────────────────────────────────────────
 
 struct EntropyResult {
     uint32_t instrument_token;
     float    H;             // Shannon entropy H(t) in nats  ∈ [0, ln(5) ≈ 1.609]
-    float    H_normalized;  // H(t) / ln(10)                ∈ [0, ~0.699]
+    float    H_normalized;  // H(t) / ln(5)                 ∈ [0, 1.0]
     bool     valid;         // false when total L2 qty is zero (empty book)
 };
 
@@ -123,7 +125,7 @@ public:
 
         // ── Step 3: normalize ─────────────────────────────────────────────────
         result.H            = H;
-        result.H_normalized = H * (1.0f / LN_10); // multiply is faster than divide
+        result.H_normalized = H * (1.0f / LN_5); // multiply is faster than divide
         result.valid        = true;
         return result;
     }

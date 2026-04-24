@@ -27,9 +27,11 @@ struct RSIResult {
 /**
  * RSICalculator — Wilder's Smoothed RSI(14), stateful per instrument.
  *
- * Seeding: bars 1..RSI_PERIOD accumulate simple average of gains/losses.
- * Smoothing: bars > RSI_PERIOD apply Wilder's EMA:
- *   avg_gain = (prev_avg_gain * (N-1) + gain) / N
+ * Seeding: bar 1 seeds prev_close only (no diff). Bars 2..RSI_PERIOD+1
+ *   accumulate RSI_PERIOD gain/loss differences.
+ *   Seed fires at count == RSI_PERIOD + 1, dividing by RSI_PERIOD.
+ * Smoothing: bars > RSI_PERIOD + 1 apply Wilder's EMA:
+ *   avg_gain = avg_gain * (N-1)/N + gain * 1/N
  */
 class RSICalculator {
 public:
@@ -52,15 +54,16 @@ public:
         s.prev_close = close;
         ++s.count;
 
-        if (s.count <= RSI_PERIOD) {
-            // Accumulate for seed
+        if (s.count <= RSI_PERIOD + 1u) {
+            // Accumulate RSI_PERIOD diffs for seed (bar 1 has no diff, so
+            // diffs arrive at bars 2..RSI_PERIOD+1 = 14 diffs total)
             s.sum_gain += gain;
             s.sum_loss += loss;
 
-            if (s.count == RSI_PERIOD) {
-                // Seed the smoothed averages
-                s.avg_gain = s.sum_gain / static_cast<double>(RSI_PERIOD - 1);
-                s.avg_loss = s.sum_loss / static_cast<double>(RSI_PERIOD - 1);
+            if (s.count == RSI_PERIOD + 1u) {
+                // Seed the smoothed averages with the simple average of N diffs
+                s.avg_gain = s.sum_gain / static_cast<double>(RSI_PERIOD);
+                s.avg_loss = s.sum_loss / static_cast<double>(RSI_PERIOD);
                 res.valid  = true;
             }
         } else {

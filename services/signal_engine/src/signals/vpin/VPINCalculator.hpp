@@ -209,10 +209,7 @@ private:
             : (state.cur_sell_vol - state.cur_buy_vol);
 
         // ── Update rolling window ─────────────────────────────────────────────
-        const uint32_t head = state.window_head & (VPIN_N_BUCKETS - 1u);
-        // VPIN_N_BUCKETS is 50, not a power of 2 — use modulo
-        // (50 % 50 = 0; head cycles 0..49)
-        // Recalculate properly:
+        // VPIN_N_BUCKETS = 50 is not a power of 2 — use modulo, not bitmask.
         const uint32_t slot = state.window_head % VPIN_N_BUCKETS;
 
         // Subtract the value being evicted from the running sum

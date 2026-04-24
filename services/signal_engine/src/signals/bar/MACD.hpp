@@ -66,8 +66,10 @@ public:
         }
 
         // ── Phase 2: Seed EMA26 ──────────────────────────────────────────────
-        s.sum26 += close;
+        // Only accumulate sum26 during seeding; stop after ema26 goes live to
+        // prevent unbounded growth on long sessions (overflow risk).
         if (!s.ema26_live) {
+            s.sum26 += close;
             if (s.count == MACD_SLOW) {
                 s.ema26      = s.sum26 / MACD_SLOW;
                 s.ema26_live = true;
