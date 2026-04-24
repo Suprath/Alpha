@@ -1,0 +1,11 @@
+CompileFlags:
+  Add:
+    - -I/Users/suprathps/code/Alpha/services/backfill_engine/include
+    - -I/Users/suprathps/code/Alpha/shared/cpp/include
+    - -std=c++20
+  Remove:
+    - -march=native   # not supported by all host clang builds
+
+Diagnostics:
+  Suppress:
+    - pp_file_not_found   # suppresses pqxx / Docker-only headers not on host
