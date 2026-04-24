@@ -77,11 +77,8 @@ bool PortfolioManager::apply_trade(const Trade& trade) {
 }
 
 void PortfolioManager::mark_to_market(uint32_t token, double current_price) {
-    auto it = positions_.find(token);
-    if (it != positions_.end() && !it->second.is_flat()) {
-        // MTM is computed on-demand via Position::unrealized_pnl()
-        (void)current_price; // stored externally when needed
-    }
+    if (current_price > 0.0)
+        last_prices_[token] = current_price;
 }
 
 const Position& PortfolioManager::position(uint32_t token) const {
@@ -96,13 +93,25 @@ PortfolioSnapshot PortfolioManager::snapshot() const {
     s.margin_used  = margin_used_;
     s.total_trades = trade_count_;
 
+    double holdings_market_value = 0.0;
     for (const auto& [token, pos] : positions_) {
-        if (!pos.is_flat()) ++s.open_positions;
-        s.gross_realized_pnl  += pos.realized_pnl;
-        s.total_charges_paid  += pos.total_charges;
+        if (!pos.is_flat()) {
+            ++s.open_positions;
+            auto price_it = last_prices_.find(token);
+            if (price_it != last_prices_.end()) {
+                // market value = qty * current_price * lot_size
+                holdings_market_value += pos.qty * price_it->second * pos.lot_size;
+            } else {
+                // No tick yet: use cost basis so equity is not distorted
+                holdings_market_value += pos.qty * pos.avg_cost * pos.lot_size;
+            }
+        }
+        s.gross_realized_pnl += pos.realized_pnl;
+        s.total_charges_paid += pos.total_charges;
     }
     s.net_realized_pnl = s.gross_realized_pnl;
-    s.total_equity     = cash_ + s.gross_realized_pnl;
+    // NAV = cash remaining + current market value of open holdings
+    s.total_equity     = cash_ + holdings_market_value;
 
     return s;
 }

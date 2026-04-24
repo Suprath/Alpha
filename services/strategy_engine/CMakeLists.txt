@@ -3,6 +3,7 @@ project(alpha-strategy-engine VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Shared headers (MarketModels, RingBuffer, ShmManager, Timestamp, etc.)
 include_directories(../../shared/cpp/include)

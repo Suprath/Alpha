@@ -81,7 +81,8 @@ private:
     double starting_capital_;
     double cash_;
     double margin_used_;
-    std::unordered_map<uint32_t, Position> positions_;
+    std::unordered_map<uint32_t, Position>  positions_;
+    std::unordered_map<uint32_t, double>    last_prices_;  // latest MTM price per token
     std::vector<Trade> trades_;
     int32_t trade_count_{0};
 

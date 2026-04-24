@@ -25,6 +25,7 @@ Thumbs.db
 *.o
 *.a
 *.so
+compile_commands.json
 
 # Python Artifacts
 __pycache__/
