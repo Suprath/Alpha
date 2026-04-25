@@ -788,6 +788,80 @@ class BackfillStatusPanel(Widget):
         self.query_one("#bf-status-content", Static).update("\n".join(lines))
 
 
+# ── Latest Backtest Summary Panel ─────────────────────────────────────────────
+
+class LatestBacktestPanel(Widget):
+    """Research mode: compact key-metric summary of the latest completed backtest. Refreshes every 3s."""
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="latest-bt-content")
+
+    def on_mount(self) -> None:
+        self.set_interval(3.0, self._trigger_refresh)
+        self._trigger_refresh()
+
+    def _trigger_refresh(self) -> None:
+        self._fetch()
+
+    @work(thread=True, exclusive=True)
+    def _fetch(self) -> None:
+        result = get_backtest_result()
+        status = get_backtest_status()
+        self.app.call_from_thread(self._render, result, status)
+
+    def _render(self, result: dict, status: dict) -> None:
+        state = status.get("state_name", "IDLE") if status else "IDLE"
+        sym   = result.get("symbol", "") or status.get("symbol", "")
+
+        if not result:
+            state_col = {
+                "RUNNING": B, "LOADING": Y, "DONE": G, "ERROR": R,
+            }.get(state, GR)
+            lines = [hdr("LAST BACKTEST", f"[{state_col}]{state}[/]")]
+            if state == "RUNNING":
+                pct_v = status.get("progress_pct", 0.0)
+                filled = int(pct_v / 5)
+                prog = f"[{G}]{'█' * filled}[/][{DIM}]{'░' * (20 - filled)}[/]"
+                lines.append(f"  {prog} [{B}]{pct_v:.1f}%[/]")
+                if sym:
+                    lines.append(f"  [{C}]{sym}[/]")
+            else:
+                lines.append(f"  [{GR}]No result yet — press X[/]")
+            self.query_one("#latest-bt-content", Static).update("\n".join(lines))
+            return
+
+        net_pnl  = result.get("total_net_pnl", 0.0)
+        ret_pct  = result.get("total_return_pct", 0.0)
+        sharpe   = result.get("sharpe_ratio", 0.0)
+        max_dd   = result.get("max_drawdown_pct", 0.0)
+        win_rate = result.get("win_rate", 0.0)
+        n_trades = result.get("total_trades", 0)
+        cap      = result.get("starting_capital", 0.0)
+        equity   = result.get("final_equity", 0.0)
+
+        pnl_col = G if net_pnl >= 0 else R
+        wr_col  = G if win_rate >= 50 else R
+        sh_col  = G if sharpe >= 1.0 else (Y if sharpe >= 0 else R)
+        ret_sign = "+" if ret_pct > 0 else ""
+
+        hdr_right = f"[{pnl_col}]{ret_sign}{ret_pct:.2f}%[/]"
+        if sym:
+            hdr_right = f"[{C}]{sym}[/]  " + hdr_right
+
+        lines = [hdr("LAST BACKTEST", hdr_right)]
+        lines.append(f"  [{GR}]Net PnL  [/][{pnl_col}]₹{net_pnl:>10,.0f}[/]")
+        lines.append(f"  [{GR}]Capital  [/][{W}]₹{cap:>10,.0f}[/]")
+        lines.append(f"  [{GR}]Equity   [/][{pnl_col}]₹{equity:>10,.0f}[/]")
+        lines.append(f"  [{DIM}]{'─'*26}[/]")
+        lines.append(f"  [{GR}]Sharpe   [/][{sh_col}]{sharpe:>10.3f}[/]")
+        lines.append(f"  [{GR}]Max DD   [/][{R}]{max_dd:>9.2f}%[/]")
+        lines.append(f"  [{DIM}]{'─'*26}[/]")
+        lines.append(f"  [{GR}]Trades   [/][{W}]{n_trades:>10}[/]")
+        lines.append(f"  [{GR}]Win Rate [/][{wr_col}]{win_rate:>9.1f}%[/]")
+
+        self.query_one("#latest-bt-content", Static).update("\n".join(lines))
+
+
 # ── Instrument Panel ───────────────────────────────────────────────────────────
 
 class InstrumentPanel(Widget):

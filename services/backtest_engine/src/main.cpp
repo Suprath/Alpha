@@ -13,12 +13,29 @@
 #include <cstdlib>
 #include <filesystem>
 #include <chrono>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace fs = std::filesystem;
 
 static std::string get_env(const char* key, const char* def = "") {
     const char* v = std::getenv(key);
     return v ? v : def;
+}
+
+// Read just the 64-byte header from a .alpha file without mmap'ing the whole thing.
+static alpha::models::AlphaFileHeader read_alpha_header(const std::string& path) {
+    int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0)
+        throw std::runtime_error("Cannot open " + path + ": " + std::strerror(errno));
+    alpha::models::AlphaFileHeader hdr{};
+    ssize_t n = ::read(fd, &hdr, sizeof(hdr));
+    ::close(fd);
+    if (n != static_cast<ssize_t>(sizeof(hdr)))
+        throw std::runtime_error("Short header read from " + path);
+    if (hdr.magic != alpha::models::ALPHA_FILE_MAGIC)
+        throw std::runtime_error("Bad magic in " + path);
+    return hdr;
 }
 
 // ── Strategy factory — stateful mean-reversion + momentum ───────────────────
@@ -311,17 +328,45 @@ int main(int argc, char* argv[]) {
         alpha::backtest::SimRunner runner(cfg, std::move(strategy_fn));
 
         try {
-            // Load pre-computed signals from QuestDB (graceful fallback if absent)
-            alpha::backtest::SignalMap signals;
+            // Read .alpha header to get the exact tick time range for the signal query.
+            // Scoping the query prevents loading stale signals from prior backtest runs.
+            uint64_t sig_start = 0;
+            uint64_t sig_end   = UINT64_MAX;
             try {
-                if (token > 0) {
-                    alpha::backtest::TickLoader sig_loader(alpha::backtest::LoaderMode::QUESTDB_SQL);
-                    signals = sig_loader.load_signals_as_map(qdb_pg_dsn, token, 0, UINT64_MAX);
-                    std::cout << "[backtest] Loaded " << signals.size()
-                              << " signal bars for token " << token << std::endl;
+                const auto hdr = read_alpha_header(file);
+                sig_start = hdr.start_ts_ns;
+                sig_end   = hdr.end_ts_ns;
+            } catch (const std::exception& e) {
+                std::cerr << "[backtest] WARNING: Cannot read header from " << file
+                          << ": " << e.what() << " — using full time range\n";
+            }
+
+            // Load pre-computed signals — fail loudly if missing or DB unreachable.
+            alpha::backtest::SignalMap signals;
+            if (token > 0) {
+                alpha::backtest::TickLoader sig_loader(alpha::backtest::LoaderMode::QUESTDB_SQL);
+                try {
+                    signals = sig_loader.load_signals_as_map(qdb_pg_dsn, token, sig_start, sig_end);
+                } catch (const std::exception& e) {
+                    std::cerr << "[backtest] ERROR: Cannot load signals for token " << token
+                              << ": " << e.what() << "\n";
+                    publisher.publish_status(
+                        alpha::backtest::BacktestRunState::BACKTEST_ERROR,
+                        token, 0, 0, symbol,
+                        std::string("Signal load failed: ") + e.what());
+                    continue;
                 }
-            } catch (...) {
-                std::cout << "[backtest] No pre-computed signals — running without signals\n";
+                if (signals.empty()) {
+                    std::cerr << "[backtest] ERROR: 0 signals for token " << token
+                              << " — run signal_engine --backtest-batch first.\n";
+                    publisher.publish_status(
+                        alpha::backtest::BacktestRunState::BACKTEST_ERROR,
+                        token, 0, 0, symbol,
+                        "No signals found — run signal_engine --backtest-batch first");
+                    continue;
+                }
+                std::cout << "[backtest] Loaded " << signals.size()
+                          << " signal bars for token " << token << std::endl;
             }
 
             publisher.publish_status(

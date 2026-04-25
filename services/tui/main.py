@@ -18,7 +18,7 @@ Live layout (top→bottom):
 Research layout (top→bottom):
   ┌─ Header ────────────────────────────────────────────────────────────────┐
   ├─ Top row (height 18):  BacktestStatusPanel | BacktestResultsPanel       │
-  ├─ Mid row (height 10):  BackfillStatusPanel | InstrumentPanel            │
+  ├─ Mid row (height 10):  BackfillStatusPanel | InstrumentPanel | LatestBacktestPanel │
   ├─ Log panel (1fr):      Defaults to backtest-run container logs          │
   └─ Footer ──────────────────────────────────────────────────────────────  ┘
 
@@ -50,6 +50,7 @@ from panels import (
     SignalsPanel, TradesPanel, LogPanel,
     BacktestStatusPanel, BacktestResultsPanel,
     BackfillStatusPanel, InstrumentPanel,
+    LatestBacktestPanel,
 )
 from modals import ConfirmModal, ServiceModal, TestTickModal, BackfillModal, BacktestModal
 from commands import stop_container, start_all_engines, stop_all_engines
@@ -137,6 +138,7 @@ class AlphaTUI(App):
             with Horizontal(id="res-mid-row"):
                 yield BackfillStatusPanel()
                 yield InstrumentPanel()
+                yield LatestBacktestPanel()
 
         yield LogPanel()
         yield Footer()

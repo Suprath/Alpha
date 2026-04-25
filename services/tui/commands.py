@@ -725,3 +725,23 @@ def get_backtest_result() -> dict:
         }
     except Exception:
         return {}
+
+
+def cleanup_backtest_data() -> bool:
+    """
+    Remove old .alpha files from the backtest data volume to prevent
+    stale data from previous runs contaminating the next backtest.
+    Returns True on success, False on failure.
+    """
+    try:
+        client = _docker()
+        client.containers.run(
+            "alpine:latest",
+            command="rm -f /data/backtest/*.alpha",
+            volumes={"alpha_backtest_data": {"bind": "/data/backtest", "mode": "rw"}},
+            remove=True,
+        )
+        return True
+    except Exception as e:
+        print(f"[cleanup] Warning: Could not clean up .alpha files: {e}")
+        return False

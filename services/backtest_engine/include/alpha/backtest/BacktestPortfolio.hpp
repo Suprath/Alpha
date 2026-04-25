@@ -39,7 +39,7 @@ public:
     bool apply_order(
         const models::OrderIntent&  intent,
         const models::BacktestTick& tick,
-        ResultAggregator&           aggregator);
+        ResultAggregator& aggregator);
 
     /**
      * MTM all open positions at current tick price.

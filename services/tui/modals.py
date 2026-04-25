@@ -37,6 +37,7 @@ from commands import (
     get_container_info,
     run_populate_backtest_ticks,
     run_signal_engine_batch,
+    cleanup_backtest_data,
 )
 
 B   = "#58a6ff"
@@ -414,11 +415,18 @@ class BacktestModal(ModalScreen):
             self._update(lines)
             self.query_one("#btn-run", Button).disabled = False
 
+        # ── Step 0: cleanup stale .alpha files from previous runs ──────────────
+        lines += [f"[{B}]Step 0/6 — Cleaning up old backtest data[/]"]
+        self._update(lines)
+        await loop.run_in_executor(None, cleanup_backtest_data)
+        lines[-1] = f"[{G}]✓ Old .alpha files removed[/]"
+        self._update(lines)
+
         # ── Step 1: backfill missing data ─────────────────────────────────────
         # historical_feed.py already checks existing candles per chunk and skips
         # dates already present — so this is a no-op when data is up to date.
         lines += [
-            f"[{B}]Step 1/5 — Backfill (auto-skip if data present)[/]",
+            f"[{B}]Step 1/6 — Backfill (auto-skip if data present)[/]",
             f"[{GR}]{from_date} → {to_date}  starting container…[/]",
         ]
         self._update(lines)
@@ -460,7 +468,7 @@ class BacktestModal(ModalScreen):
             self._update(lines)
 
         # ── Step 2: compute OHLCV signals (RSI, MACD, BB, VWAP dev) ─────────────
-        lines += ["", f"[{B}]Step 2/5 — Computing bar signals per instrument[/]"]
+        lines += ["", f"[{B}]Step 2/6 — Computing bar signals per instrument[/]"]
         self._update(lines)
 
         for i, (tok, sym) in enumerate(tokens, 1):
@@ -471,7 +479,9 @@ class BacktestModal(ModalScreen):
                 lambda t=tok, s=sym: run_signal_engine_batch(t, s, start_ns, end_ns),
             )
             if result.startswith("ERROR"):
-                lines[-1] = f"[{GR}]  [{i}/{len(tokens)}] {sym:<12} ⚠ no signals (VWAP fallback)[/]"
+                lines[-1] = f"[{R}]  [{i}/{len(tokens)}] {sym:<12} ✗ {result}[/]"
+                self._update(lines)
+                return abort(f"Signal computation failed for {sym} — aborting.")
             else:
                 lines[-1] = f"[{G}]  [{i}/{len(tokens)}] {sym:<12} ✓ signals ready[/]"
             self._update(lines)
@@ -480,7 +490,7 @@ class BacktestModal(ModalScreen):
         self._update(lines)
 
         # ── Step 3: populate backtest_ticks ───────────────────────────────────
-        lines += ["", f"[{B}]Step 3/5 — Populating backtest_ticks[/]",
+        lines += ["", f"[{B}]Step 3/6 — Populating backtest_ticks[/]",
                   f"[{GR}]QuestDB candles → backtest_ticks…[/]"]
         self._update(lines)
 
@@ -492,7 +502,7 @@ class BacktestModal(ModalScreen):
         self._update(lines)
 
         # ── Step 4: export .alpha files ───────────────────────────────────────
-        lines += ["", f"[{B}]Step 4/5 — Exporting .alpha files[/]"]
+        lines += ["", f"[{B}]Step 4/6 — Exporting .alpha files[/]"]
         self._update(lines)
 
         for i, (tok, sym) in enumerate(tokens, 1):
@@ -516,7 +526,7 @@ class BacktestModal(ModalScreen):
         self._update(lines)
 
         # ── Step 5: run simulation ────────────────────────────────────────────
-        lines += ["", f"[{B}]Step 5/5 — Launching simulation…[/]"]
+        lines += ["", f"[{B}]Step 5/6 — Launching simulation…[/]"]
         self._update(lines)
 
         cid = await loop.run_in_executor(

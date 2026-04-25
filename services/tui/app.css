@@ -108,7 +108,14 @@ BackfillStatusPanel {
 }
 
 InstrumentPanel {
-    width: 7fr;
+    width: 4fr;
+    border-right: tall #21262d;
+    background: #0d1117;
+    padding: 0 1;
+}
+
+LatestBacktestPanel {
+    width: 3fr;
     background: #0d1117;
     padding: 0 1;
 }

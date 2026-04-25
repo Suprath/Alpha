@@ -39,6 +39,7 @@ set(BACKTEST_SOURCES
     ../../services/market_engine/src/execution/ExecutionSimulator.cpp
     # Generated protobuf sources
     ${PROTO_SRCS}
+        ../strategy_engine/src/strategy/starbucks.h
 )
 
 # ── Executable ────────────────────────────────────────────────────────────
